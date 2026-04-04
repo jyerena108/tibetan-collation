@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "Pydurma"
+version = "0.1.0"
+authors = [
+  { name="Elie", email="roux.elie@gmail.com" },
+  { name="OpenPecha", email="dev@openpecha.org" },
+]
+description = "This package will produce vulgate text"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "fast-diff-match-patch==2.0.1",
+    "numpy>=1.24.2",
+    "openpecha",
+    "pypandoc==1.11",
+    "prettytable==3.8.0",
+    "regex"
+]
+
+
+[tool.setuptools.package-data]
+Pydurma = ["res/bo/*.txt"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "pre-commit",
+]
+
+
+[project.urls]
+"Homepage" = "https://github.com/OpenPecha/openpecha-project-template"
+"Bug Tracker" = "https://github.com/OpenPecha/openpecha-project-template/issues"
