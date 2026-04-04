@@ -2,8 +2,8 @@ streamlit
 bayoo-docx
 fast-diff-match-patch
 numpy
-openpecha==0.8.6
 prettytable
 pypandoc
 regex
 setuptools
+pyewts
