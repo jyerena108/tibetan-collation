@@ -1,0 +1,8 @@
+streamlit
+bayoo-docx
+fast-diff-match-patch
+numpy
+openpecha
+prettytable
+pypandoc
+regex
