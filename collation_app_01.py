@@ -1,0 +1,533 @@
+"""
+Tibetan Collation Web App — Streamlit
+======================================
+Run with:
+    pip install streamlit bayoo-docx
+    streamlit run collation_app.py
+"""
+
+import io
+import tempfile
+from pathlib import Path
+
+import streamlit as st
+from docx import Document
+from docx.shared import Pt
+from docx.enum.text import WD_LINE_SPACING
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+
+from Pydurma.gen.normalizer_gen import GenericNormalizer
+from Pydurma.gen.tokenizer_gen import GenericTokenizer
+from Pydurma.encoder import Encoder
+from Pydurma.aligners.fdmp import FDMPaligner
+from Pydurma.utils.utils import column_matrix_to_row_matrix, token_row_to_text_row
+
+
+# ─────────────────────────────────────────────
+#  CONSTANTS
+# ─────────────────────────────────────────────
+
+COLOR_LIST = [
+    "FFD37F", "9AD1FF", "A5FFB1", "FF9A9A", "C79CFF",
+    "FFB27F", "7AFFD5", "FF7FBA", "B5FF7A", "7FB1FF",
+    "FF7F7F", "FFE07F",
+]
+
+PUNCT_TO_IGNORE = set([
+    "་", "།", "༎", "༏", "༐", "༑", "༄", "༅", "༈",
+    "༼", "༽", "༌", "༔", "༗", "༘",
+    " ", "\n", "\t", ",", ".", "?", "!", ":", ";",
+])
+
+
+# ─────────────────────────────────────────────
+#  CORE LOGIC (unchanged from your script)
+# ─────────────────────────────────────────────
+
+def shrink_footnote_style(document, font_size=8, line_spacing_multiple=0.85):
+    styles = document.styles
+    for style_name in ("Footnote Text", "Footnote Reference"):
+        try:
+            s = styles[style_name]
+            s.font.size = Pt(font_size)
+            if style_name == "Footnote Text":
+                pf = s.paragraph_format
+                pf.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
+                pf.line_spacing = line_spacing_multiple
+                pf.space_before = Pt(0)
+                pf.space_after = Pt(0)
+        except KeyError:
+            pass
+
+
+def strip_ignorable(s: str) -> str:
+    return "".join(ch for ch in s if ch not in PUNCT_TO_IGNORE)
+
+
+def align_three(text1: str, text2: str, text3: str):
+    normalizer = GenericNormalizer()
+    encoder = Encoder()
+    tokenizer = GenericTokenizer(encoder, normalizer)
+    aligner = FDMPaligner()
+
+    tokens1, tokenstr1 = tokenizer.tokenize(text1)
+    tokens2, tokenstr2 = tokenizer.tokenize(text2)
+    tokens3, tokenstr3 = tokenizer.tokenize(text3)
+
+    matrix = aligner.get_alignment_matrix(
+        [tokenstr1, tokenstr2, tokenstr3],
+        [tokens1, tokens2, tokens3],
+    )
+    row_matrix = column_matrix_to_row_matrix(matrix)
+
+    aligned1 = token_row_to_text_row(row_matrix[0], text1)
+    aligned2 = token_row_to_text_row(row_matrix[1], text2)
+    aligned3 = token_row_to_text_row(row_matrix[2], text3)
+    return aligned1, aligned2, aligned3
+
+
+def align_two(text1: str, text2: str):
+    """2-way alignment. Returns aligned3 as None to signal single-comparison mode."""
+    normalizer = GenericNormalizer()
+    encoder = Encoder()
+    tokenizer = GenericTokenizer(encoder, normalizer)
+    aligner = FDMPaligner()
+
+    tokens1, tokenstr1 = tokenizer.tokenize(text1)
+    tokens2, tokenstr2 = tokenizer.tokenize(text2)
+
+    matrix = aligner.get_alignment_matrix(
+        [tokenstr1, tokenstr2],
+        [tokens1, tokens2],
+    )
+    row_matrix = column_matrix_to_row_matrix(matrix)
+
+    aligned1 = token_row_to_text_row(row_matrix[0], text1)
+    aligned2 = token_row_to_text_row(row_matrix[1], text2)
+    # None signals to export functions that there is no third version
+    return aligned1, aligned2, None
+
+
+def set_run_background_color(run, hex_color: str):
+    hex_color = hex_color.lstrip("#").upper()
+    rPr = run._element.get_or_add_rPr()
+    shd = rPr.find(qn("w:shd"))
+    if shd is None:
+        shd = OxmlElement("w:shd")
+        rPr.append(shd)
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), hex_color)
+
+
+def build_note_text(
+    base_norm, norm2, norm3,
+    diff12, diff13,
+    v2_missing, v3_missing,
+    v1_missing=False,
+    label1="V1", label2="V2", label3="V3",
+) -> str:
+    parts = []
+    if v1_missing:
+        has2, has3 = bool(norm2), bool(norm3)
+        if has2 and has3:
+            if norm2 == norm3:
+                parts.append(f"{label1}: omitted; {label2} & {label3}: {norm2}")
+            else:
+                parts.append(f"{label1}: omitted")
+                parts.append(f"{label2}: {norm2}")
+                parts.append(f"{label3}: {norm3}")
+        elif has2:
+            parts.append(f"{label1}: omitted; {label2}: {norm2}")
+        elif has3:
+            parts.append(f"{label1}: omitted; {label3}: {norm3}")
+        return "; ".join(parts)
+
+    if diff12 and diff13:
+        if v2_missing and v3_missing:
+            parts.append(f"{label2} & {label3}: {base_norm} omitted")
+        elif v2_missing:
+            parts.append(f"{label2}: {base_norm} omitted")
+            if norm3:
+                parts.append(f"{label3}: {norm3}")
+        elif v3_missing:
+            if norm2:
+                parts.append(f"{label2}: {norm2}")
+            parts.append(f"{label3}: {base_norm} omitted")
+        else:
+            if norm2 == norm3 and norm2:
+                parts.append(f"{label2} & {label3}: {norm2}")
+            else:
+                if norm2:
+                    parts.append(f"{label2}: {norm2}")
+                if norm3:
+                    parts.append(f"{label3}: {norm3}")
+    elif diff12:
+        if v2_missing:
+            parts.append(f"{label2}: {base_norm} omitted")
+        elif norm2:
+            parts.append(f"{label2}: {norm2}")
+    elif diff13:
+        if v3_missing:
+            parts.append(f"{label3}: {base_norm} omitted")
+        elif norm3:
+            parts.append(f"{label3}: {norm3}")
+
+    return "; ".join(parts)
+
+
+def export_three_way_with_notes(
+    aligned1, aligned2, aligned3,
+    label1, label2, label3,
+    name1="base", name2="comp1", name3="comp2",
+):
+    two_way = aligned3 is None  # single-comparison mode
+
+    doc = Document()
+    doc.add_heading("Tibetan Collation Report", level=1)
+    if two_way:
+        doc.add_paragraph(f"Base / golden: {name1}  |  Comparison: {name2}")
+    else:
+        doc.add_paragraph(f"Base / golden: {name1}  |  Comparison 1: {name2}  |  Comparison 2: {name3}")
+
+    num_cols = 2 if two_way else 3
+    table = doc.add_table(rows=2, cols=num_cols)
+    hdr = table.rows[0].cells
+    hdr[0].text = f"{label1} (golden, notes)"
+    hdr[1].text = label2
+    if not two_way:
+        hdr[2].text = label3
+
+    row = table.rows[1].cells
+    p_v1 = row[0].paragraphs[0]
+    p_v2 = row[1].paragraphs[0]
+    p_v3 = row[2].paragraphs[0] if not two_way else None
+
+    if two_way:
+        aligned3 = []  # empty — never iterated directly
+    max_len = max(len(aligned1), len(aligned2), len(aligned3) if aligned3 else 0)
+    a1 = list(aligned1) + [""] * (max_len - len(aligned1))
+    a2 = list(aligned2) + [""] * (max_len - len(aligned2))
+    a3 = list(aligned3) + [""] * (max_len - len(aligned3)) if not two_way else [""] * max_len
+
+    notes = []
+    note_active = False
+    current_note_color = None
+    color_idx = -1
+
+    for seg1, seg2, seg3 in zip(a1, a2, a3):
+        seg2_raw = seg2
+        seg3_raw = seg3 if not two_way else ""
+        seg1 = "" if seg1 == "-" else seg1
+        seg2 = "" if seg2 == "-" else seg2
+        seg3 = "" if (two_way or seg3 == "-") else seg3
+
+        norm1 = strip_ignorable(seg1)
+        norm2 = strip_ignorable(seg2)
+        norm3 = "" if two_way else strip_ignorable(seg3)
+
+        v2_missing = (seg2_raw == "-" or (seg2 and norm2 == "")) and norm1 != ""
+        v3_missing = False if two_way else ((seg3_raw == "-" or (seg3 and norm3 == "")) and norm1 != "")
+        v1_missing = (norm1 == "" and (norm2 != "" or (not two_way and norm3 != "")))
+
+        diff12 = True if v2_missing else (norm1 != norm2) if norm1 or norm2 else False
+        diff13 = False if two_way else (True if v3_missing else (norm1 != norm3) if norm1 or norm3 else False)
+
+        has_real_diff = (norm1 != "" and (diff12 or diff13)) or v1_missing
+        note_start_here = False
+
+        if has_real_diff and not note_active:
+            note_text = build_note_text(
+                norm1, norm2, norm3,
+                diff12, diff13, v2_missing, v3_missing,
+                v1_missing=v1_missing,
+                label1=label1, label2=label2, label3=label3,
+            )
+            if note_text:
+                notes.append(note_text)
+                note_start_here = True
+                note_active = True
+                color_idx = (color_idx + 1) % len(COLOR_LIST)
+                current_note_color = COLOR_LIST[color_idx]
+
+        color = current_note_color if note_active else None
+        note_number = len(notes)
+
+        if seg1:
+            run1 = p_v1.add_run(seg1)
+            if color and (diff12 or diff13) and norm1 != "":
+                set_run_background_color(run1, color)
+            if note_start_here:
+                m = p_v1.add_run(f"[{note_number}]")
+                m.font.superscript = True
+        elif note_start_here:
+            m = p_v1.add_run(f"[{note_number}]")
+            m.font.superscript = True
+
+        if seg2:
+            run2 = p_v2.add_run(seg2)
+            if color and (diff12 or v1_missing) and norm2 != "":
+                set_run_background_color(run2, color)
+            if note_start_here and (diff12 or v1_missing):
+                m = p_v2.add_run(f"[{note_number}]")
+                m.font.superscript = True
+
+        if not two_way and p_v3 is not None and seg3:
+            run3 = p_v3.add_run(seg3)
+            if color and (diff13 or v1_missing) and norm3 != "":
+                set_run_background_color(run3, color)
+            if note_start_here and (diff13 or v1_missing):
+                m = p_v3.add_run(f"[{note_number}]")
+                m.font.superscript = True
+
+        if note_active and not has_real_diff:
+            note_active = False
+            current_note_color = None
+
+    if notes:
+        doc.add_paragraph()
+        doc.add_heading("Notes", level=2)
+        for i, text in enumerate(notes, start=1):
+            p = doc.add_paragraph()
+            r = p.add_run(f"[{i}] ")
+            r.bold = True
+            p.add_run(text)
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf, notes
+
+
+def export_golden_with_footnotes(
+    aligned1, aligned2, aligned3,
+    notes,
+    label1, label2, label3,
+    name1="base",
+):
+    two_way = aligned3 is None
+
+    doc = Document()
+    shrink_footnote_style(doc, font_size=8, line_spacing_multiple=0.85)
+    doc.add_heading(f"{label1} with Footnotes", level=1)
+    if two_way:
+        doc.add_paragraph(f"Base: {name1}  |  Footnotes from comparison with {label2}.")
+    else:
+        doc.add_paragraph(f"Base: {name1}  |  Footnotes from comparison with {label2} and {label3}.")
+    doc.add_paragraph()
+
+    p_text = doc.add_paragraph()
+
+    if two_way:
+        aligned3 = []
+    max_len = max(len(aligned1), len(aligned2), len(aligned3) if aligned3 else 0)
+    a1 = list(aligned1) + [""] * (max_len - len(aligned1))
+    a2 = list(aligned2) + [""] * (max_len - len(aligned2))
+    a3 = list(aligned3) + [""] * (max_len - len(aligned3)) if not two_way else [""] * max_len
+
+    note_active = False
+    note_index = 0
+
+    for seg1, seg2, seg3 in zip(a1, a2, a3):
+        seg2_raw = seg2
+        seg3_raw = seg3 if not two_way else ""
+        seg1 = "" if seg1 == "-" else seg1
+        seg2 = "" if seg2 == "-" else seg2
+        seg3 = "" if (two_way or seg3 == "-") else seg3
+
+        norm1 = strip_ignorable(seg1)
+        norm2 = strip_ignorable(seg2)
+        norm3 = "" if two_way else strip_ignorable(seg3)
+
+        v2_missing = (seg2_raw == "-" or (seg2 and norm2 == "")) and norm1 != ""
+        v3_missing = False if two_way else ((seg3_raw == "-" or (seg3 and norm3 == "")) and norm1 != "")
+        v1_missing = (norm1 == "" and (norm2 != "" or (not two_way and norm3 != "")))
+
+        diff12 = True if v2_missing else (norm1 != norm2) if norm1 or norm2 else False
+        diff13 = False if two_way else (True if v3_missing else (norm1 != norm3) if norm1 or norm3 else False)
+
+        has_real_diff = (norm1 != "" and (diff12 or diff13)) or v1_missing
+        note_start_here = False
+
+        if has_real_diff and not note_active:
+            note_index += 1
+            note_start_here = True
+            note_active = True
+
+        if seg1:
+            p_text.add_run(seg1)
+
+        if note_start_here and 1 <= note_index <= len(notes):
+            p_text.add_footnote(notes[note_index - 1])
+
+        if note_active and not has_real_diff:
+            note_active = False
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
+
+# ─────────────────────────────────────────────
+#  STREAMLIT UI
+# ─────────────────────────────────────────────
+
+st.set_page_config(
+    page_title="Tibetan Collation Tool",
+    page_icon="📜",
+    layout="centered",
+)
+
+st.title("📜 Tibetan Collation Tool")
+st.caption("Upload your texts, run the collation, and download the Word outputs.")
+
+st.divider()
+
+# ── File uploads
+st.subheader("1 · Upload texts")
+
+col_a, col_b = st.columns([1, 1])
+with col_a:
+    base_file = st.file_uploader(
+        "Base / golden text (.txt)",
+        type=["txt"],
+        help="This is the primary version — all notes are anchored here.",
+    )
+    label1 = st.text_input("Label for base text", value="BX1")
+
+with col_b:
+    comp_mode = st.radio(
+        "Number of comparison texts",
+        options=["1 comparison text", "2 comparison texts"],
+        index=1,
+    )
+
+st.divider()
+st.subheader("2 · Comparison text(s)")
+
+two_texts = comp_mode == "2 comparison texts"
+
+col1, col2 = st.columns(2) if two_texts else (st.columns(1)[0], None)
+
+with col1:
+    comp1_file = st.file_uploader("Comparison text 1 (.txt)", type=["txt"], key="c1")
+    label2 = st.text_input("Label for comparison 1", value="GX1")
+
+if two_texts and col2 is not None:
+    with col2:
+        comp2_file = st.file_uploader("Comparison text 2 (.txt)", type=["txt"], key="c2")
+        label3 = st.text_input("Label for comparison 2", value="GB1")
+else:
+    comp2_file = None
+    label3 = "—"
+
+st.divider()
+st.subheader("3 · Run")
+
+ready = base_file is not None and comp1_file is not None
+if two_texts:
+    ready = ready and comp2_file is not None
+
+if not ready:
+    st.info("Upload all required files above to enable the collation.")
+
+run_btn = st.button("▶ Run Collation", disabled=not ready, type="primary")
+
+if run_btn and ready:
+    text1 = base_file.read().decode("utf-8")
+    text2 = comp1_file.read().decode("utf-8")
+    text3 = comp2_file.read().decode("utf-8") if comp2_file else ""
+
+    with st.spinner("Aligning texts… this may take a minute for long texts."):
+        if two_texts:
+            aligned1, aligned2, aligned3 = align_three(text1, text2, text3)
+        else:
+            aligned1, aligned2, aligned3 = align_two(text1, text2)
+
+    with st.spinner("Building collation report…"):
+        name1 = base_file.name
+        name2 = comp1_file.name
+        name3 = comp2_file.name if comp2_file else "—"
+
+        report_buf, notes = export_three_way_with_notes(
+            aligned1, aligned2, aligned3,
+            label1, label2, label3,
+            name1=name1, name2=name2, name3=name3,
+        )
+
+    footnote_buf = None
+    try:
+        with st.spinner("Building footnote document…"):
+            footnote_buf = export_golden_with_footnotes(
+                aligned1, aligned2, aligned3,
+                notes,
+                label1, label2, label3,
+                name1=name1,
+            )
+    except AttributeError:
+        st.warning(
+            "⚠️ Footnote document skipped — `add_footnote` not available. "
+            "Install **bayoo-docx** or **python-docx-2023** instead of python-docx."
+        )
+
+    # Store results in session_state so downloads persist after button clicks
+    st.session_state["report_buf"] = report_buf.getvalue()
+    st.session_state["footnote_buf"] = footnote_buf.getvalue() if footnote_buf else None
+    st.session_state["note_count"] = len(notes)
+
+# Show download section whenever results are available in session_state
+if "report_buf" in st.session_state:
+    st.success(f"Done! Found **{st.session_state['note_count']}** difference note(s).")
+    st.divider()
+    st.subheader("4 · Download outputs")
+
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        st.download_button(
+            label="⬇ Collation report (.docx)",
+            data=st.session_state["report_buf"],
+            file_name="collation_report.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key="dl_report",
+        )
+    with dl2:
+        if st.session_state["footnote_buf"]:
+            st.download_button(
+                label="⬇ Golden text + footnotes (.docx)",
+                data=st.session_state["footnote_buf"],
+                file_name="collation_footnotes.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key="dl_footnotes",
+            )
+        else:
+            st.button("⬇ Golden text + footnotes (.docx)", disabled=True)
+
+st.divider()
+with st.expander("ℹ️ Setup instructions"):
+    st.markdown("""
+**Requirements**
+
+```bash
+pip install streamlit bayoo-docx
+# bayoo-docx (or python-docx-2023) adds the add_footnote() method
+# needed for the footnote output. If you only need the collation report,
+# plain python-docx works too.
+```
+
+Your Pydurma library must also be installed / on the Python path.
+
+**Run the app**
+
+```bash
+streamlit run collation_app.py
+```
+
+A browser tab will open automatically at `http://localhost:8501`.
+
+**Deploy for free (optional)**
+
+Push this file to a GitHub repo, then connect it at
+[share.streamlit.io](https://share.streamlit.io) — no server needed.
+""")
