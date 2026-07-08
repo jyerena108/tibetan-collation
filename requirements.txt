@@ -1,6 +1,6 @@
 streamlit
 bayoo-docx
-fast-diff-match-patch
+diff-match-patch
 numpy
 prettytable
 pypandoc

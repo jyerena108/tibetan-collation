@@ -1,7 +1,24 @@
 import logging
-
-from fast_diff_match_patch import diff
 from typing import Tuple, List, Dict
+
+import diff_match_patch as _dmp_module
+
+def diff(text1: str, text2: str, checklines: int = 0, cleanup=None):
+    """Compatibility wrapper: mimics fast_diff_match_patch.diff() output.
+
+    fast_diff_match_patch returns [(char, count)] with char in '=', '-', '+'.
+    diff_match_patch returns [(int, text)] with int in -1, 0, 1.
+    """
+    dmp = _dmp_module.diff_match_patch()
+    raw = dmp.diff_main(text1, text2, checklines=bool(checklines))
+    if cleanup == 'semantic':
+        dmp.diff_cleanupSemantic(raw)
+    elif cleanup == 'efficiency':
+        dmp.diff_cleanupEfficiency(raw)
+    _OP = {_dmp_module.diff_match_patch.DIFF_EQUAL: '=',
+           _dmp_module.diff_match_patch.DIFF_DELETE: '-',
+           _dmp_module.diff_match_patch.DIFF_INSERT: '+'}
+    return [(_OP[op], len(text)) for op, text in raw]
 
 from Pydurma.aligners.aligner import Aligner, TokenMatrix
 from Pydurma.aligners.post_processing_matrix import merge_consecutive_diff_tokens_entries
