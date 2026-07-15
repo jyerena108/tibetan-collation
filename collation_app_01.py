@@ -39,8 +39,11 @@ COLOR_LIST = [
 ]
 
 # Shad (Tibetan sentence/clause punctuation) — kept separate so it can be
-# toggled on/off during collation. U+0F0D..U+0F11 and U+0F14.
-SHAD_CHARS = set(["།", "༎", "༏", "༐", "༑", "༔"])
+# toggled on/off during collation. U+0F0D..U+0F11 and U+0F14. The ASCII "/"
+# is the Wylie/EWTS transliteration of the shad, so transliterated texts get
+# the same shad-ignore treatment (a single "/" and a double "//" both reduce
+# to shad characters that are stripped when shad differences are ignored).
+SHAD_CHARS = set(["།", "༎", "༏", "༐", "༑", "༔", "/"])
 
 # Characters that are always ignored when detecting content differences
 # (tsheg, yig-mgo, brackets, spaces, western punctuation).
@@ -57,6 +60,39 @@ PUNCT_TO_IGNORE = PUNCT_TO_IGNORE_BASE | SHAD_CHARS
 # ─────────────────────────────────────────────
 #  CORE LOGIC (unchanged from your script)
 # ─────────────────────────────────────────────
+
+def ensure_footnote_reference_style(document):
+    """Define the FootnoteReference character style with superscript.
+
+    bayoo-docx emits each in-text reference mark as
+    <w:rStyle w:val="FootnoteReference"/> but never defines that style, so
+    Word renders the number at the baseline. We create it here so the mark
+    renders raised/superscript like a real footnote number.
+    """
+    styles_el = document.styles.element
+    target = None
+    for st_el in styles_el.findall(qn("w:style")):
+        if st_el.get(qn("w:styleId")) == "FootnoteReference":
+            target = st_el
+            break
+    if target is None:
+        target = OxmlElement("w:style")
+        target.set(qn("w:type"), "character")
+        target.set(qn("w:styleId"), "FootnoteReference")
+        name = OxmlElement("w:name")
+        name.set(qn("w:val"), "footnote reference")
+        target.append(name)
+        styles_el.append(target)
+    rPr = target.find(qn("w:rPr"))
+    if rPr is None:
+        rPr = OxmlElement("w:rPr")
+        target.append(rPr)
+    va = rPr.find(qn("w:vertAlign"))
+    if va is None:
+        va = OxmlElement("w:vertAlign")
+        rPr.append(va)
+    va.set(qn("w:val"), "superscript")
+
 
 def shrink_footnote_style(document, font_size=8, line_spacing_multiple=0.85):
     styles = document.styles
@@ -88,6 +124,51 @@ def strip_ignorable(s: str, ignore_shad: bool = True) -> str:
     return "".join(ch for ch in s if ch not in ignore_set)
 
 
+_SEP_CHARS = set(["་", "༌", " ", "\t", "\n"])
+
+
+def _reattach_stranded_achung(*rows):
+    """Move a lone initial a-chung onto the syllable that follows it.
+
+    The aligner sometimes strands an initial a-chung (Wylie ``'`` / Unicode
+    ``འ``) at the end of one cell while the syllable it belongs to lands in the
+    next cell — e.g. witness ``"su '"`` + ``"gyur"`` against base ``"su "`` +
+    ``"gyur"``. Left alone this reads as a spurious ``su'`` variant. Moving the
+    a-chung forward yields base ``"gyur"`` vs witness ``"'gyur"`` so the note
+    correctly reads ``gyur] 'gyur``. Only a *lone* a-chung (preceded by a
+    separator, i.e. an initial one) is moved; a final a-chung glued to letters
+    such as ``dga'`` is left untouched. Per-row concatenation is preserved.
+    """
+    for row in rows:
+        if row is None:
+            continue
+        n = len(row)
+        for i in range(n):
+            seg = row[i]
+            if not seg or seg == "-":
+                continue
+            # Only when the a-chung is the very last character of the cell can
+            # it move to the next cell's front without reordering anything in
+            # between, so the base/golden text stays byte-for-byte intact.
+            if seg[-1] not in A_CHUNG_CHARS:
+                continue
+            k = len(seg)
+            while k > 0 and seg[k - 1] in A_CHUNG_CHARS:
+                k -= 1
+            # Lone/initial a-chung only: preceded by a separator or nothing.
+            if k > 0 and seg[k - 1] not in _SEP_CHARS:
+                continue
+            run = seg[k:]
+            j = i + 1
+            while j < n and (not row[j] or row[j] == "-"):
+                j += 1
+            if j >= n:
+                continue
+            row[i] = seg[:k]
+            row[j] = run + row[j]
+    return rows
+
+
 def align_three(text1: str, text2: str, text3: str):
     normalizer = GenericNormalizer()
     encoder = Encoder()
@@ -107,6 +188,7 @@ def align_three(text1: str, text2: str, text3: str):
     aligned1 = token_row_to_text_row(row_matrix[0], text1)
     aligned2 = token_row_to_text_row(row_matrix[1], text2)
     aligned3 = token_row_to_text_row(row_matrix[2], text3)
+    _reattach_stranded_achung(aligned1, aligned2, aligned3)
     return aligned1, aligned2, aligned3
 
 
@@ -128,6 +210,7 @@ def align_two(text1: str, text2: str):
 
     aligned1 = token_row_to_text_row(row_matrix[0], text1)
     aligned2 = token_row_to_text_row(row_matrix[1], text2)
+    _reattach_stranded_achung(aligned1, aligned2)
     # None signals to export functions that there is no third version
     return aligned1, aligned2, None
 
@@ -148,6 +231,12 @@ OMITTED_MARK = "om."  # standard critical-apparatus mark for an omitted reading
 
 TSHEG = "་"  # Tibetan intersyllabic tsheg, used to rejoin syllables
 
+# a-chung: U+0F60 (འ) in Unicode Tibetan, apostrophe (') in Wylie/EWTS. When an
+# alignment boundary strands a bare a-chung as its own token, it should re-join
+# the adjacent syllable so an added/omitted a-chung reads as e.g. "su'" rather
+# than surfacing as a meaningless standalone "'".
+A_CHUNG_CHARS = set(["འ", "'"])
+
 # Syllable separators for display splitting: tsheg, no-break tsheg, whitespace.
 _SYLLABLE_SEP_RE = re.compile(r"[་༌\s]+")
 
@@ -157,7 +246,8 @@ def _syllables(seg: str, ignore_shad: bool):
 
     Tsheg and whitespace act as separators (and are dropped). Shad is removed
     only when shad differences are ignored, so it stays visible otherwise.
-    Letters (and any residual marks) are preserved inside each syllable.
+    Letters (and any residual marks) are preserved inside each syllable. A bare
+    a-chung is re-attached to its neighbour rather than kept as its own token.
     """
     if not seg:
         return []
@@ -165,7 +255,21 @@ def _syllables(seg: str, ignore_shad: bool):
     if ignore_shad:
         for ch in SHAD_CHARS:
             s = s.replace(ch, "")
-    return [p for p in _SYLLABLE_SEP_RE.split(s) if p]
+    parts = [p for p in _SYLLABLE_SEP_RE.split(s) if p]
+    merged = []
+    pending = ""  # a leading bare a-chung waiting to attach to the next syllable
+    for p in parts:
+        if all(c in A_CHUNG_CHARS for c in p):
+            if merged:
+                merged[-1] = merged[-1] + p
+            else:
+                pending += p
+        else:
+            merged.append(pending + p)
+            pending = ""
+    if pending:
+        merged.append(pending)
+    return merged
 
 
 def _trim_common_syllables(readings):
@@ -405,7 +509,6 @@ def export_golden_with_footnotes(
     two_way = aligned3 is None
 
     doc = Document()
-    shrink_footnote_style(doc, font_size=8, line_spacing_multiple=0.85)
     doc.add_heading(f"{label1} with Footnotes", level=1)
     if two_way:
         doc.add_paragraph(f"Base: {name1}  |  Footnotes from comparison with {label2}.")
@@ -451,14 +554,31 @@ def export_golden_with_footnotes(
             note_start_here = True
             note_active = True
 
-        if seg1:
-            p_text.add_run(seg1)
+        place_note = note_start_here and 1 <= note_index <= len(notes)
 
-        if note_start_here and 1 <= note_index <= len(notes):
+        if place_note and seg1:
+            # Put the reference mark right after the annotated word, before any
+            # trailing space, so it renders as "su² gyur" not "su ²gyur".
+            content = seg1.rstrip()
+            trailing = seg1[len(content):]
+            if content:
+                p_text.add_run(content)
             p_text.add_footnote(notes[note_index - 1])
+            if trailing:
+                p_text.add_run(trailing)
+        else:
+            if seg1:
+                p_text.add_run(seg1)
+            if place_note:
+                p_text.add_footnote(notes[note_index - 1])
 
         if note_active and not has_real_diff:
             note_active = False
+
+    # Footnote styles are only present after add_footnote() has run, so apply
+    # formatting now (before save) rather than on the empty document.
+    ensure_footnote_reference_style(doc)
+    shrink_footnote_style(doc, font_size=8, line_spacing_multiple=0.85)
 
     buf = io.BytesIO()
     doc.save(buf)
