@@ -10,6 +10,7 @@ Run with:
 """
 
 import io
+import re
 import tempfile
 from pathlib import Path
 
@@ -37,11 +38,20 @@ COLOR_LIST = [
     "FF7F7F", "FFE07F",
 ]
 
-PUNCT_TO_IGNORE = set([
-    "་", "།", "༎", "༏", "༐", "༑", "༄", "༅", "༈",
-    "༼", "༽", "༌", "༔", "༗", "༘",
+# Shad (Tibetan sentence/clause punctuation) — kept separate so it can be
+# toggled on/off during collation. U+0F0D..U+0F11 and U+0F14.
+SHAD_CHARS = set(["།", "༎", "༏", "༐", "༑", "༔"])
+
+# Characters that are always ignored when detecting content differences
+# (tsheg, yig-mgo, brackets, spaces, western punctuation).
+PUNCT_TO_IGNORE_BASE = set([
+    "་", "༄", "༅", "༈",
+    "༼", "༽", "༌", "༗", "༘",
     " ", "\n", "\t", ",", ".", "?", "!", ":", ";",
 ])
+
+# Full ignore set including shad (used when shad differences are ignored).
+PUNCT_TO_IGNORE = PUNCT_TO_IGNORE_BASE | SHAD_CHARS
 
 
 # ─────────────────────────────────────────────
@@ -54,6 +64,9 @@ def shrink_footnote_style(document, font_size=8, line_spacing_multiple=0.85):
         try:
             s = styles[style_name]
             s.font.size = Pt(font_size)
+            if style_name == "Footnote Reference":
+                # ensure the in-text reference mark renders raised/superscript
+                s.font.superscript = True
             if style_name == "Footnote Text":
                 pf = s.paragraph_format
                 pf.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
@@ -64,8 +77,15 @@ def shrink_footnote_style(document, font_size=8, line_spacing_multiple=0.85):
             pass
 
 
-def strip_ignorable(s: str) -> str:
-    return "".join(ch for ch in s if ch not in PUNCT_TO_IGNORE)
+def strip_ignorable(s: str, ignore_shad: bool = True) -> str:
+    """Remove characters that don't count as content differences.
+
+    When ignore_shad is True (default), shad punctuation is also stripped, so
+    shad-only differences won't generate notes. When False, shad is preserved
+    and therefore shad differences will surface as variant notes.
+    """
+    ignore_set = PUNCT_TO_IGNORE if ignore_shad else PUNCT_TO_IGNORE_BASE
+    return "".join(ch for ch in s if ch not in ignore_set)
 
 
 def align_three(text1: str, text2: str, text3: str):
@@ -124,66 +144,137 @@ def set_run_background_color(run, hex_color: str):
     shd.set(qn("w:fill"), hex_color)
 
 
+OMITTED_MARK = "om."  # standard critical-apparatus mark for an omitted reading
+
+TSHEG = "་"  # Tibetan intersyllabic tsheg, used to rejoin syllables
+
+# Syllable separators for display splitting: tsheg, no-break tsheg, whitespace.
+_SYLLABLE_SEP_RE = re.compile(r"[་༌\s]+")
+
+
+def _syllables(seg: str, ignore_shad: bool):
+    """Split an aligned segment into display syllables.
+
+    Tsheg and whitespace act as separators (and are dropped). Shad is removed
+    only when shad differences are ignored, so it stays visible otherwise.
+    Letters (and any residual marks) are preserved inside each syllable.
+    """
+    if not seg:
+        return []
+    s = seg
+    if ignore_shad:
+        for ch in SHAD_CHARS:
+            s = s.replace(ch, "")
+    return [p for p in _SYLLABLE_SEP_RE.split(s) if p]
+
+
+def _trim_common_syllables(readings):
+    """Trim syllables shared by *all* readings at the start and the end.
+
+    ``readings`` is a list of syllable-lists. Returns new syllable-lists with
+    the common leading/trailing syllables removed, so only the differing part
+    remains. Because at least one reading always differs when a note exists,
+    this never trims a reading down to nothing on every side simultaneously.
+    """
+    readings = [list(r) for r in readings]
+    if len(readings) < 2:
+        return readings
+    # common prefix
+    n = min(len(r) for r in readings)
+    pre = 0
+    while pre < n and all(r[pre] == readings[0][pre] for r in readings):
+        pre += 1
+    readings = [r[pre:] for r in readings]
+    # common suffix
+    n = min(len(r) for r in readings)
+    suf = 0
+    while suf < n and all(r[-1 - suf] == readings[0][-1 - suf] for r in readings):
+        suf += 1
+    if suf:
+        readings = [r[: len(r) - suf] for r in readings]
+    return readings
+
+
+def _reading_display(sylls) -> str:
+    """Render a (trimmed) syllable-list for a note; empty = an omission."""
+    return TSHEG.join(sylls) if sylls else OMITTED_MARK
+
+
 def build_note_text(
-    base_norm, norm2, norm3,
-    diff12, diff13,
-    v2_missing, v3_missing,
-    v1_missing=False,
+    seg1, seg2, seg3,
+    two_way=False,
+    positive=False,
+    ignore_shad=True,
     label1="V1", label2="V2", label3="V3",
 ) -> str:
-    parts = []
-    if v1_missing:
-        has2, has3 = bool(norm2), bool(norm3)
-        if has2 and has3:
-            if norm2 == norm3:
-                parts.append(f"{label1}: omitted; {label2} & {label3}: {norm2}")
-            else:
-                parts.append(f"{label1}: omitted")
-                parts.append(f"{label2}: {norm2}")
-                parts.append(f"{label3}: {norm3}")
-        elif has2:
-            parts.append(f"{label1}: omitted; {label2}: {norm2}")
-        elif has3:
-            parts.append(f"{label1}: omitted; {label3}: {norm3}")
-        return "; ".join(parts)
+    """Build a single apparatus note in classic critical-edition style.
 
-    if diff12 and diff13:
-        if v2_missing and v3_missing:
-            parts.append(f"{label2} & {label3}: {base_norm} omitted")
-        elif v2_missing:
-            parts.append(f"{label2}: {base_norm} omitted")
-            if norm3:
-                parts.append(f"{label3}: {norm3}")
-        elif v3_missing:
-            if norm2:
-                parts.append(f"{label2}: {norm2}")
-            parts.append(f"{label3}: {base_norm} omitted")
+    Format: ``<lemma>] <label>: <reading>; <label>: <reading>``
+
+    - The lemma is the base/golden reading (or ``om.`` when the base omits it).
+    - Multi-syllable segments are reduced to just the differing syllable(s):
+      syllables shared by every witness are trimmed away, and the surviving
+      syllables keep their tsheg separators so they read correctly.
+    - Negative apparatus (default): only witnesses that differ from the lemma
+      are listed. Positive apparatus lists every comparison witness.
+
+    Witnesses sharing the same reading are grouped, e.g. ``GX1 GB1: ...``.
+    """
+    # comparison keys (punctuation/tsheg-insensitive) decide agreement
+    key1 = strip_ignorable(seg1, ignore_shad)
+    key2 = strip_ignorable(seg2, ignore_shad)
+    key3 = "" if two_way else strip_ignorable(seg3, ignore_shad)
+
+    # display syllable lists (tsheg preserved between syllables)
+    s1 = _syllables(seg1, ignore_shad)
+    s2 = _syllables(seg2, ignore_shad)
+    s3 = [] if two_way else _syllables(seg3, ignore_shad)
+
+    # isolate the differing syllable(s) by trimming shared context
+    all_readings = [s1, s2] if two_way else [s1, s2, s3]
+    trimmed = _trim_common_syllables(all_readings)
+    if two_way:
+        t1, t2 = trimmed
+        t3 = []
+    else:
+        t1, t2, t3 = trimmed
+
+    lemma = _reading_display(t1)
+
+    # (label, comparison_key, trimmed_syllables) per comparison witness
+    witnesses = [(label2, key2, t2)]
+    if not two_way:
+        witnesses.append((label3, key3, t3))
+
+    if positive:
+        selected = [(lab, t) for (lab, k, t) in witnesses]
+    else:
+        selected = [(lab, t) for (lab, k, t) in witnesses if k != key1]
+
+    if not selected:
+        return ""
+
+    # group witnesses that share the same displayed reading, preserving order
+    groups = []  # list of [reading_display, [labels...]]
+    for lab, t in selected:
+        disp = _reading_display(t)
+        for g in groups:
+            if g[0] == disp:
+                g[1].append(lab)
+                break
         else:
-            if norm2 == norm3 and norm2:
-                parts.append(f"{label2} & {label3}: {norm2}")
-            else:
-                if norm2:
-                    parts.append(f"{label2}: {norm2}")
-                if norm3:
-                    parts.append(f"{label3}: {norm3}")
-    elif diff12:
-        if v2_missing:
-            parts.append(f"{label2}: {base_norm} omitted")
-        elif norm2:
-            parts.append(f"{label2}: {norm2}")
-    elif diff13:
-        if v3_missing:
-            parts.append(f"{label3}: {base_norm} omitted")
-        elif norm3:
-            parts.append(f"{label3}: {norm3}")
+            groups.append([disp, [lab]])
 
-    return "; ".join(parts)
+    parts = [f"{' '.join(labs)}: {disp}" for disp, labs in groups]
+    return f"{lemma}] " + "; ".join(parts)
 
 
 def export_three_way_with_notes(
     aligned1, aligned2, aligned3,
     label1, label2, label3,
     name1="base", name2="comp1", name3="comp2",
+    ignore_shad=True,
+    positive=False,
 ):
     two_way = aligned3 is None  # single-comparison mode
 
@@ -226,9 +317,9 @@ def export_three_way_with_notes(
         seg2 = "" if seg2 == "-" else seg2
         seg3 = "" if (two_way or seg3 == "-") else seg3
 
-        norm1 = strip_ignorable(seg1)
-        norm2 = strip_ignorable(seg2)
-        norm3 = "" if two_way else strip_ignorable(seg3)
+        norm1 = strip_ignorable(seg1, ignore_shad)
+        norm2 = strip_ignorable(seg2, ignore_shad)
+        norm3 = "" if two_way else strip_ignorable(seg3, ignore_shad)
 
         v2_missing = (seg2_raw == "-" or (seg2 and norm2 == "")) and norm1 != ""
         v3_missing = False if two_way else ((seg3_raw == "-" or (seg3 and norm3 == "")) and norm1 != "")
@@ -242,9 +333,8 @@ def export_three_way_with_notes(
 
         if has_real_diff and not note_active:
             note_text = build_note_text(
-                norm1, norm2, norm3,
-                diff12, diff13, v2_missing, v3_missing,
-                v1_missing=v1_missing,
+                seg1, seg2, seg3,
+                two_way=two_way, positive=positive, ignore_shad=ignore_shad,
                 label1=label1, label2=label2, label3=label3,
             )
             if note_text:
@@ -293,8 +383,10 @@ def export_three_way_with_notes(
         doc.add_heading("Notes", level=2)
         for i, text in enumerate(notes, start=1):
             p = doc.add_paragraph()
-            r = p.add_run(f"[{i}] ")
+            r = p.add_run(f"{i}")
+            r.font.superscript = True
             r.bold = True
+            p.add_run(" ")
             p.add_run(text)
 
     buf = io.BytesIO()
@@ -308,6 +400,7 @@ def export_golden_with_footnotes(
     notes,
     label1, label2, label3,
     name1="base",
+    ignore_shad=True,
 ):
     two_way = aligned3 is None
 
@@ -339,9 +432,9 @@ def export_golden_with_footnotes(
         seg2 = "" if seg2 == "-" else seg2
         seg3 = "" if (two_way or seg3 == "-") else seg3
 
-        norm1 = strip_ignorable(seg1)
-        norm2 = strip_ignorable(seg2)
-        norm3 = "" if two_way else strip_ignorable(seg3)
+        norm1 = strip_ignorable(seg1, ignore_shad)
+        norm2 = strip_ignorable(seg2, ignore_shad)
+        norm3 = "" if two_way else strip_ignorable(seg3, ignore_shad)
 
         v2_missing = (seg2_raw == "-" or (seg2 and norm2 == "")) and norm1 != ""
         v3_missing = False if two_way else ((seg3_raw == "-" or (seg3 and norm3 == "")) and norm1 != "")
@@ -427,7 +520,27 @@ else:
     label3 = "—"
 
 st.divider()
-st.subheader("3 · Run")
+st.subheader("3 · Options")
+
+ignore_shad = st.checkbox(
+    "Ignore shad (།) differences",
+    value=True,
+    help="When checked, differences that consist only of shad punctuation "
+    "(།, ༎, ༔ …) are not reported as variant notes. Uncheck to have shad "
+    "differences show up in the apparatus.",
+)
+
+apparatus_mode = st.radio(
+    "Apparatus type",
+    options=["Negative (only variants)", "Positive (all witnesses)"],
+    index=0,
+    help="Negative apparatus lists only the witnesses that differ from the "
+    "base/golden reading. Positive apparatus lists every comparison witness "
+    "at each variant point, including those that agree with the lemma.",
+)
+positive = apparatus_mode.startswith("Positive")
+
+st.subheader("4 · Run")
 
 ready = base_file is not None and comp1_file is not None
 if two_texts:
@@ -458,6 +571,8 @@ if run_btn and ready:
             aligned1, aligned2, aligned3,
             label1, label2, label3,
             name1=name1, name2=name2, name3=name3,
+            ignore_shad=ignore_shad,
+            positive=positive,
         )
 
     footnote_buf = None
@@ -468,6 +583,7 @@ if run_btn and ready:
                 notes,
                 label1, label2, label3,
                 name1=name1,
+                ignore_shad=ignore_shad,
             )
     except AttributeError:
         st.warning(
@@ -484,7 +600,7 @@ if run_btn and ready:
 if "report_buf" in st.session_state:
     st.success(f"Done! Found **{st.session_state['note_count']}** difference note(s).")
     st.divider()
-    st.subheader("4 · Download outputs")
+    st.subheader("5 · Download outputs")
 
     dl1, dl2 = st.columns(2)
     with dl1:
