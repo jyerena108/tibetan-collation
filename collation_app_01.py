@@ -43,18 +43,75 @@ COLOR_LIST = [
 # is the Wylie/EWTS transliteration of the shad, so transliterated texts get
 # the same shad-ignore treatment (a single "/" and a double "//" both reduce
 # to shad characters that are stripped when shad differences are ignored).
-SHAD_CHARS = set(["།", "༎", "༏", "༐", "༑", "༔", "/"])
+SHAD_CHARS_CORE = set(["།", "༎", "༏", "༐", "༑", "༔", "/"])
 
 # Characters that are always ignored when detecting content differences
 # (tsheg, yig-mgo, brackets, spaces, western punctuation).
-PUNCT_TO_IGNORE_BASE = set([
+PUNCT_TO_IGNORE_CORE = set([
     "་", "༄", "༅", "༈",
     "༼", "༽", "༌", "༗", "༘",
-    " ", "\n", "\t", ",", ".", "?", "!", ":", ";",
+    " ", "\n", "\t", ",", ".", "?", ":", ";",
 ])
 
-# Full ignore set including shad (used when shad differences are ignored).
+# Effective sets — (re)built by apply_preprocessing_options() below. The UI
+# calls it with the user's preprocessing choices before running a collation;
+# the module-level call further down installs the defaults for library use.
+SHAD_CHARS = set(SHAD_CHARS_CORE)
+PUNCT_TO_IGNORE_BASE = set(PUNCT_TO_IGNORE_CORE)
 PUNCT_TO_IGNORE = PUNCT_TO_IGNORE_BASE | SHAD_CHARS
+
+
+# ── Preprocessing (input normalization) ──────────────────────────────
+# Folio/page tags like [354], [zhe 1], [kha zhe lnga] are reference markers,
+# not text; left in place they collate as readings and pollute the apparatus.
+_FOLIO_TAG_RE = re.compile(r"\[[^\[\]\n]{1,40}\]")
+
+
+def strip_folio_tags(text: str) -> str:
+    """Remove [..] folio/page tags, leaving a space so words don't fuse."""
+    return _FOLIO_TAG_RE.sub(" ", text)
+
+
+def count_preprocessing_hits(text: str) -> dict:
+    """Per-rule occurrence counts, for the preprocessing preview."""
+    return {
+        "folio/page tags [..]": len(_FOLIO_TAG_RE.findall(text)),
+        "underscores _": text.count("_"),
+        "pipes |": text.count("|"),
+        "head marks @ # !": sum(text.count(c) for c in "@#!"),
+    }
+
+
+def apply_preprocessing_options(
+    underscore_as_space=True,
+    pipe_as_shad=True,
+    ignore_head_marks=True,
+):
+    """Install the effective character sets used by the collation.
+
+    - underscore_as_space: EWTS writes an explicit space as ``_``; treat it
+      as whitespace everywhere (ignore set, syllable splitting, a-chung
+      reattachment).
+    - pipe_as_shad: ``|`` is an alternate EWTS shad (common in OCR output).
+    - ignore_head_marks: ``@``, ``#``, ``!`` transliterate yig-mgo ornaments
+      (༄༅ …), which are structural, not textual.
+
+    Rebinding the module-level sets keeps every existing function signature
+    unchanged; the display/golden text itself is never rewritten by these.
+    """
+    global SHAD_CHARS, PUNCT_TO_IGNORE_BASE, PUNCT_TO_IGNORE
+    global _SYLLABLE_SEP_RE, _SEP_CHARS
+    SHAD_CHARS = set(SHAD_CHARS_CORE) | ({"|"} if pipe_as_shad else set())
+    PUNCT_TO_IGNORE_BASE = (
+        set(PUNCT_TO_IGNORE_CORE)
+        | ({"_"} if underscore_as_space else set())
+        | ({"@", "#", "!"} if ignore_head_marks else set())
+    )
+    PUNCT_TO_IGNORE = PUNCT_TO_IGNORE_BASE | SHAD_CHARS
+    _SYLLABLE_SEP_RE = re.compile(r"[་༌\s_]+" if underscore_as_space else r"[་༌\s]+")
+    _SEP_CHARS = set(["་", "༌", " ", "\t", "\n"]) | (
+        {"_"} if underscore_as_space else set()
+    )
 
 
 # ─────────────────────────────────────────────
@@ -121,6 +178,10 @@ def strip_ignorable(s: str, ignore_shad: bool = True) -> str:
     and therefore shad differences will surface as variant notes.
     """
     ignore_set = PUNCT_TO_IGNORE if ignore_shad else PUNCT_TO_IGNORE_BASE
+    if not ignore_shad and "|" in SHAD_CHARS:
+        # "|" and "/" are the same shad in different notation; when shad is
+        # kept for comparison they must not read as a difference.
+        s = s.replace("|", "/")
     return "".join(ch for ch in s if ch not in ignore_set)
 
 
@@ -155,8 +216,11 @@ def _reattach_stranded_achung(*rows):
             k = len(seg)
             while k > 0 and seg[k - 1] in A_CHUNG_CHARS:
                 k -= 1
-            # Lone/initial a-chung only: preceded by a separator or nothing.
-            if k > 0 and seg[k - 1] not in _SEP_CHARS:
+            # Lone/initial a-chung only: preceded by a separator, a shad, or
+            # nothing. After a shad a new word begins, so a lone a-chung there
+            # can only be the initial letter of the next word (e.g. "/ /'"
+            # before "dir" is the 'a of "'dir").
+            if k > 0 and seg[k - 1] not in _SEP_CHARS and seg[k - 1] not in SHAD_CHARS:
                 continue
             run = seg[k:]
             j = i + 1
@@ -255,7 +319,13 @@ def _syllables(seg: str, ignore_shad: bool):
     if ignore_shad:
         for ch in SHAD_CHARS:
             s = s.replace(ch, "")
-    parts = [p for p in _SYLLABLE_SEP_RE.split(s) if p]
+    # Drop ignorable non-content characters (head marks, western punctuation)
+    # from the display so readings never show e.g. "@#" from a source file.
+    parts = []
+    for p in _SYLLABLE_SEP_RE.split(s):
+        p = "".join(c for c in p if c not in PUNCT_TO_IGNORE_BASE)
+        if p:
+            parts.append(p)
     merged = []
     pending = ""  # a leading bare a-chung waiting to attach to the next syllable
     for p in parts:
@@ -591,6 +661,11 @@ def export_golden_with_footnotes(
     return buf
 
 
+# Install the default preprocessing sets (must run after every dependent
+# constant above is defined; the UI re-applies with the user's choices).
+apply_preprocessing_options()
+
+
 # ─────────────────────────────────────────────
 #  STREAMLIT UI
 # ─────────────────────────────────────────────
@@ -647,6 +722,38 @@ else:
 st.divider()
 st.subheader("3 · Options")
 
+with st.expander("Preprocessing", expanded=False):
+    st.caption(
+        "Cleanup applied before collation. Every option is a no-op if the "
+        "pattern doesn't occur in your files, so leaving them all on is safe."
+    )
+    prep_tags = st.checkbox(
+        "Strip folio/page tags like [354], [zhe 1]",
+        value=True,
+        help="Bracketed reference markers are removed before alignment so "
+        "they don't show up as spurious variants. They also disappear from "
+        "the golden text output.",
+    )
+    prep_underscore = st.checkbox(
+        "Treat _ as a space (EWTS explicit space)",
+        value=True,
+        help="In EWTS transliteration an underscore marks an explicit space. "
+        "Without this, e.g. pa/_bdag and pa/ bdag read as different words.",
+    )
+    prep_pipe = st.checkbox(
+        "Treat | as a shad (EWTS / OCR)",
+        value=True,
+        help="Some OCR output writes the shad as a pipe. With this on, | "
+        "behaves exactly like / — ignored or reported together with shad.",
+    )
+    prep_head = st.checkbox(
+        "Ignore head marks @ # ! (yig-mgo ༄༅)",
+        value=True,
+        help="These transliterate the ornamental head marks that open a "
+        "section; they are structural, not textual, so they never count as "
+        "variants.",
+    )
+
 ignore_shad = st.checkbox(
     "Ignore shad (།) differences",
     value=True,
@@ -680,6 +787,32 @@ if run_btn and ready:
     text1 = base_file.read().decode("utf-8")
     text2 = comp1_file.read().decode("utf-8")
     text3 = comp2_file.read().decode("utf-8") if comp2_file else ""
+
+    # Apply the user's preprocessing choices
+    apply_preprocessing_options(
+        underscore_as_space=prep_underscore,
+        pipe_as_shad=prep_pipe,
+        ignore_head_marks=prep_head,
+    )
+    prep_preview = {}
+    names_texts = [(base_file.name, text1), (comp1_file.name, text2)]
+    if comp2_file:
+        names_texts.append((comp2_file.name, text3))
+    for fname, ftext in names_texts:
+        prep_preview[fname] = count_preprocessing_hits(ftext)
+    if prep_tags:
+        text1 = strip_folio_tags(text1)
+        text2 = strip_folio_tags(text2)
+        text3 = strip_folio_tags(text3) if text3 else text3
+
+    with st.expander("Preprocessing preview", expanded=False):
+        st.caption(
+            "Occurrences of each preprocessing pattern found per file "
+            "(counted before cleanup was applied)."
+        )
+        for fname, counts in prep_preview.items():
+            hits = ", ".join(f"{k}: {v}" for k, v in counts.items() if v) or "nothing to clean"
+            st.markdown(f"- **{fname}** — {hits}")
 
     with st.spinner("Aligning texts… this may take a minute for long texts."):
         if two_texts:
