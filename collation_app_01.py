@@ -369,9 +369,20 @@ def _trim_common_syllables(readings):
     return readings
 
 
+_TIBETAN_CHAR_RE = re.compile(r"[ༀ-࿿]")
+
+
 def _reading_display(sylls) -> str:
-    """Render a (trimmed) syllable-list for a note; empty = an omission."""
-    return TSHEG.join(sylls) if sylls else OMITTED_MARK
+    """Render a (trimmed) syllable-list for a note; empty = an omission.
+
+    Syllables are rejoined with a tsheg for Tibetan-script input but with a
+    plain space for Wylie/roman input — a tsheg between roman letters would
+    mix scripts (e.g. "sgrog་la'ang" instead of "sgrog la'ang").
+    """
+    if not sylls:
+        return OMITTED_MARK
+    joiner = TSHEG if any(_TIBETAN_CHAR_RE.search(s) for s in sylls) else " "
+    return joiner.join(sylls)
 
 
 def build_note_text(
