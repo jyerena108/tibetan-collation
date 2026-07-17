@@ -72,6 +72,29 @@ def strip_folio_tags(text: str) -> str:
     return _FOLIO_TAG_RE.sub(" ", text)
 
 
+def extract_folio_tags(text: str):
+    """Strip [..] tags like strip_folio_tags, but remember what and where.
+
+    Returns ``(stripped_text, milestones)`` where milestones is a list of
+    ``(offset, tag)`` pairs: ``offset`` is the character position in the
+    *stripped* text (pointing at the space that replaced the tag) where the
+    tag can be re-inserted later, e.g. into the golden document.
+    """
+    milestones = []
+    out = []
+    pos = 0  # length of stripped text built so far
+    last = 0
+    for m in _FOLIO_TAG_RE.finditer(text):
+        out.append(text[last : m.start()])
+        pos += m.start() - last
+        milestones.append((pos, m.group(0)))
+        out.append(" ")
+        pos += 1
+        last = m.end()
+    out.append(text[last:])
+    return "".join(out), milestones
+
+
 def count_preprocessing_hits(text: str) -> dict:
     """Per-rule occurrence counts, for the preprocessing preview."""
     return {
@@ -591,8 +614,37 @@ def export_golden_with_footnotes(
     label1, label2, label3,
     name1="base",
     ignore_shad=True,
+    milestones=None,
 ):
+    """Golden text with variant footnotes.
+
+    ``milestones`` is an optional list of ``(offset, tag)`` pairs from
+    extract_folio_tags(): folio/page tags stripped before collation that are
+    re-inserted here — as italic runs at their original character positions —
+    without ever having been part of the alignment or the apparatus.
+    """
     two_way = aligned3 is None
+
+    milestones = sorted(milestones) if milestones else []
+    ms_index = 0  # next milestone still to be emitted
+    char_pos = 0  # running offset into the (concatenated) base text
+
+    def emit(p, text):
+        """Write base text, splicing in any milestone tags it spans."""
+        nonlocal ms_index, char_pos
+        start = 0
+        end_pos = char_pos + len(text)
+        while ms_index < len(milestones) and milestones[ms_index][0] < end_pos:
+            cut = milestones[ms_index][0] - char_pos
+            if cut > start:
+                p.add_run(text[start:cut])
+            tag_run = p.add_run(milestones[ms_index][1])
+            tag_run.italic = True
+            start = cut
+            ms_index += 1
+        if start < len(text):
+            p.add_run(text[start:])
+        char_pos = end_pos
 
     doc = Document()
     doc.add_heading(f"{label1} with Footnotes", level=1)
@@ -648,18 +700,25 @@ def export_golden_with_footnotes(
             content = seg1.rstrip()
             trailing = seg1[len(content):]
             if content:
-                p_text.add_run(content)
+                emit(p_text, content)
             p_text.add_footnote(notes[note_index - 1])
             if trailing:
-                p_text.add_run(trailing)
+                emit(p_text, trailing)
         else:
             if seg1:
-                p_text.add_run(seg1)
+                emit(p_text, seg1)
             if place_note:
                 p_text.add_footnote(notes[note_index - 1])
 
         if note_active and not has_real_diff:
             note_active = False
+
+    # Any milestone past the last emitted character (e.g. a tag at the very
+    # end of the base text) still needs to be written out.
+    while ms_index < len(milestones):
+        tag_run = p_text.add_run(milestones[ms_index][1])
+        tag_run.italic = True
+        ms_index += 1
 
     # Footnote styles are only present after add_footnote() has run, so apply
     # formatting now (before save) rather than on the empty document.
@@ -733,7 +792,7 @@ else:
 st.divider()
 st.subheader("3 · Options")
 
-with st.expander("Preprocessing", expanded=False):
+with st.expander("Preprocessing", expanded=True):
     st.caption(
         "Cleanup applied before collation. Each option only takes effect if "
         "its pattern actually appears in your files — otherwise it changes "
@@ -743,8 +802,17 @@ with st.expander("Preprocessing", expanded=False):
         "Strip folio/page tags like [354], [zhe 1]",
         value=True,
         help="Bracketed reference markers are removed before alignment so "
-        "they don't show up as spurious variants. They also disappear from "
-        "the golden text output.",
+        "they don't show up as spurious variants.",
+    )
+    prep_keep_tags = st.checkbox(
+        "↳ …but keep the base text's tags in the golden output as milestones",
+        value=True,
+        disabled=not prep_tags,
+        help="The stripped tags from the base/golden text are re-inserted "
+        "into the downloaded golden document (in italics, at their original "
+        "positions) as page references. They are never part of the "
+        "collation itself. Tags from the comparison texts are not kept — "
+        "the golden document reproduces only the base text.",
     )
     prep_underscore = st.checkbox(
         "Treat _ as a space (EWTS explicit space)",
@@ -815,8 +883,12 @@ if run_btn and ready:
         names_texts.append((comp2_file.name, text3))
     for fname, ftext in names_texts:
         prep_preview[fname] = count_preprocessing_hits(ftext)
+    golden_milestones = None
     if prep_tags:
-        text1 = strip_folio_tags(text1)
+        if prep_keep_tags:
+            text1, golden_milestones = extract_folio_tags(text1)
+        else:
+            text1 = strip_folio_tags(text1)
         text2 = strip_folio_tags(text2)
         text3 = strip_folio_tags(text3) if text3 else text3
 
@@ -857,6 +929,7 @@ if run_btn and ready:
                 label1, label2, label3,
                 name1=name1,
                 ignore_shad=ignore_shad,
+                milestones=golden_milestones,
             )
     except AttributeError:
         st.warning(
