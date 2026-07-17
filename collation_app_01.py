@@ -724,8 +724,9 @@ st.subheader("3 · Options")
 
 with st.expander("Preprocessing", expanded=False):
     st.caption(
-        "Cleanup applied before collation. Every option is a no-op if the "
-        "pattern doesn't occur in your files, so leaving them all on is safe."
+        "Cleanup applied before collation. Each option only takes effect if "
+        "its pattern actually appears in your files — otherwise it changes "
+        "nothing. Leaving them all checked is safe."
     )
     prep_tags = st.checkbox(
         "Strip folio/page tags like [354], [zhe 1]",
@@ -784,9 +785,12 @@ if not ready:
 run_btn = st.button("▶ Run Collation", disabled=not ready, type="primary")
 
 if run_btn and ready:
-    text1 = base_file.read().decode("utf-8")
-    text2 = comp1_file.read().decode("utf-8")
-    text3 = comp2_file.read().decode("utf-8") if comp2_file else ""
+    # .getvalue() (not .read()) — Streamlit keeps the uploaded file's read
+    # cursor across reruns, so a second Run would read empty bytes and
+    # silently reuse the previous results.
+    text1 = base_file.getvalue().decode("utf-8")
+    text2 = comp1_file.getvalue().decode("utf-8")
+    text3 = comp2_file.getvalue().decode("utf-8") if comp2_file else ""
 
     # Apply the user's preprocessing choices
     apply_preprocessing_options(
