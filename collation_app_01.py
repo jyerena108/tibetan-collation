@@ -313,16 +313,21 @@ def build_note_text(
 ) -> str:
     """Build a single apparatus note in classic critical-edition style.
 
-    Format: ``<lemma>] <label>: <reading>; <label>: <reading>``
+    Format: ``<baseSiglum> <lemma>] <sigla> <reading>; <sigla> <reading>``
 
-    - The lemma is the base/golden reading (or ``om.`` when the base omits it).
+    - The lemma is the base/golden reading (or ``om.`` when the base omits it),
+      and is itself labelled with the base siglum so it can be moved into the
+      variant list unchanged if the base is later reassigned.
+    - Sigla precede the reading they belong to on both sides of the bracket.
+      Sigla that share a reading are comma-separated (``AB1, GB1``); distinct
+      readings are separated by ``; ``. No colon is used.
     - Multi-syllable segments are reduced to just the differing syllable(s):
       syllables shared by every witness are trimmed away, and the surviving
       syllables keep their tsheg separators so they read correctly.
     - Negative apparatus (default): only witnesses that differ from the lemma
       are listed. Positive apparatus lists every comparison witness.
 
-    Witnesses sharing the same reading are grouped, e.g. ``GX1 GB1: ...``.
+    Witnesses sharing the same reading are grouped, e.g. ``GX1, GB1 ...``.
     """
     # comparison keys (punctuation/tsheg-insensitive) decide agreement
     key1 = strip_ignorable(seg1, ignore_shad)
@@ -369,8 +374,8 @@ def build_note_text(
         else:
             groups.append([disp, [lab]])
 
-    parts = [f"{' '.join(labs)}: {disp}" for disp, labs in groups]
-    return f"{lemma}] " + "; ".join(parts)
+    parts = [f"{', '.join(labs)} {disp}" for disp, labs in groups]
+    return f"{label1} {lemma}] " + "; ".join(parts)
 
 
 def export_three_way_with_notes(
