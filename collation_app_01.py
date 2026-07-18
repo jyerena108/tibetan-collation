@@ -608,6 +608,24 @@ def export_three_way_with_notes(
     return buf, notes
 
 
+def _note_lemma_is_shad(note_text: str, label1: str) -> bool:
+    """True when a note's lemma consists only of shad punctuation.
+
+    Notes read ``<siglum> <lemma>] <variants>``; the lemma is what the
+    footnote mark should sit on. When it is a shad, the mark must stay on
+    the shad instead of moving back onto the preceding word.
+    """
+    close = note_text.find("]")
+    if close <= 0:
+        return False
+    lemma = note_text[:close]
+    prefix = label1 + " "
+    if lemma.startswith(prefix):
+        lemma = lemma[len(prefix):]
+    lemma = lemma.strip()
+    return bool(lemma) and all(c in SHAD_CHARS or c.isspace() for c in lemma)
+
+
 def export_golden_with_footnotes(
     aligned1, aligned2, aligned3,
     notes,
@@ -696,9 +714,28 @@ def export_golden_with_footnotes(
 
         if place_note and seg1:
             # Put the reference mark right after the annotated word, before any
-            # trailing space, so it renders as "su² gyur" not "su ²gyur".
-            content = seg1.rstrip()
-            trailing = seg1[len(content):]
+            # trailing space or shad, so it renders as "su² gyur" not
+            # "su ²gyur" and "grag go²/" not "grag go/²".
+            #
+            # Exception: when the lemma *is* a shad (only possible with shad
+            # differences reported), the note is about that shad, so the mark
+            # must stay on it rather than jump back to the preceding word.
+            # The test has to use the note's lemma rather than the raw
+            # segment: a segment often holds a word and a shad together
+            # ("cing / "), while the lemma is trimmed down to just "/".
+            lemma_is_shad = _note_lemma_is_shad(notes[note_index - 1], label1)
+            cut = len(seg1)
+            if not lemma_is_shad:
+                while cut > 0 and (seg1[cut - 1].isspace() or seg1[cut - 1] in SHAD_CHARS
+                                   or seg1[cut - 1] in PUNCT_TO_IGNORE_BASE):
+                    cut -= 1
+            else:
+                while cut > 0 and seg1[cut - 1].isspace():
+                    cut -= 1
+            if cut == 0:  # nothing to anchor to — keep the original placement
+                cut = len(seg1.rstrip())
+            content = seg1[:cut]
+            trailing = seg1[cut:]
             if content:
                 emit(p_text, content)
             p_text.add_footnote(notes[note_index - 1])
