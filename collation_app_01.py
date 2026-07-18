@@ -1007,29 +1007,42 @@ if "report_buf" in st.session_state:
             st.button("⬇ Golden text + footnotes (.docx)", disabled=True)
 
 st.divider()
-with st.expander("ℹ️ Setup instructions"):
-    st.markdown("""
-**Requirements**
+REPO_URL = "https://github.com/jyerena108/tibetan-collation"
+
+with st.expander("ℹ️ About this tool"):
+    st.markdown(f"""
+**Tibetan Collation Tool** — aligns two or three versions of a Tibetan text
+and generates a critical apparatus in Word format. Works with Unicode Tibetan
+and Wylie/EWTS transliteration.
+
+Notes read `BX1 kyi] AB1, GB1 ni` — *where BX1 reads `kyi`, AB1 and GB1 read
+`ni`*. Omissions are marked `om.`
+
+**How to cite**
+
+> Yerena, J. *Tibetan Collation Tool* (2026). {REPO_URL}
+
+If the alignment matters to your argument, please also cite Pydurma:
+
+> Roux, E. & Kaldan, T. *Pydurma* (2023). https://github.com/openpecha/pydurma
+
+**Run your own copy**
 
 ```bash
-pip install streamlit bayoo-docx
-# bayoo-docx (or python-docx-2023) adds the add_footnote() method
-# needed for the footnote output. If you only need the collation report,
-# plain python-docx works too.
+git clone {REPO_URL}.git
+cd tibetan-collation
+pip install -r requirements.txt
+streamlit run collation_app_01.py
 ```
 
-Your Pydurma library must also be installed / on the Python path.
-
-**Run the app**
-
-```bash
-streamlit run collation_app.py
-```
-
-A browser tab will open automatically at `http://localhost:8501`.
-
-**Deploy for free (optional)**
-
-Push this file to a GitHub repo, then connect it at
-[share.streamlit.io](https://share.streamlit.io) — no server needed.
+Full documentation is in the [README]({REPO_URL}#readme).
 """)
+
+st.caption(
+    f"**Tibetan Collation Tool** — free and open source "
+    f"([MIT]({REPO_URL}/blob/main/LICENSE)) · [source code]({REPO_URL})  \n"
+    "Alignment by [Pydurma](https://github.com/openpecha/pydurma) "
+    "(OpenPecha, MIT).  \n"
+    "Provided as-is, without warranty. Please check collation results before "
+    "relying on them in published work."
+)
