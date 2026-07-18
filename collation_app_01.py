@@ -1039,7 +1039,7 @@ Full documentation is in the [README]({REPO_URL}#readme).
 """)
 
 st.caption(
-    f"**Tibetan Collation Tool** — free and open source "
+    f"**Tibetan Collation Tool** by Yerena, J. — free and open source "
     f"([MIT]({REPO_URL}/blob/main/LICENSE)) · [source code]({REPO_URL})  \n"
     "Alignment by [Pydurma](https://github.com/openpecha/pydurma) "
     "(OpenPecha, MIT).  \n"

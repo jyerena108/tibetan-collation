@@ -124,6 +124,8 @@ No server needed. Streamlit redeploys automatically on every push.
 
 ## Credits
 
+Built by **Yerena, J.**
+
 Alignment is powered by **[Pydurma](https://github.com/openpecha/pydurma)** by
 Elie Roux and Tenzin Kaldan ([OpenPecha](https://openpecha.org)), MIT licensed
 and vendored in `Pydurma/`.
