@@ -429,7 +429,9 @@ def build_note_text(
       syllables shared by every witness are trimmed away, and the surviving
       syllables keep their tsheg separators so they read correctly.
     - Negative apparatus (default): only witnesses that differ from the lemma
-      are listed. Positive apparatus lists every comparison witness.
+      are listed. A positive apparatus additionally credits the witnesses
+      that agree with the base by listing their sigla with the lemma
+      (``BX1, AB1 la] GB1 pa``) instead of repeating the reading.
 
     Witnesses sharing the same reading are grouped, e.g. ``GX1, GB1 ...``.
     """
@@ -459,10 +461,15 @@ def build_note_text(
     if not two_way:
         witnesses.append((label3, key3, t3))
 
+    # Witnesses agreeing with the base support the lemma. A positive
+    # apparatus records that by listing their sigla with the lemma —
+    # "BX1, AB1 la] GB1 pa" — rather than repeating the reading as a
+    # variant. A negative apparatus leaves them out entirely.
+    lemma_labels = [label1]
     if positive:
-        selected = [(lab, t) for (lab, k, t) in witnesses]
-    else:
-        selected = [(lab, t) for (lab, k, t) in witnesses if k != key1]
+        lemma_labels += [lab for (lab, k, t) in witnesses if k == key1]
+
+    selected = [(lab, t) for (lab, k, t) in witnesses if k != key1]
 
     if not selected:
         return ""
@@ -479,7 +486,7 @@ def build_note_text(
             groups.append([disp, [lab]])
 
     parts = [f"{', '.join(labs)} {disp}" for disp, labs in groups]
-    return f"{label1} {lemma}] " + "; ".join(parts)
+    return f"{', '.join(lemma_labels)} {lemma}] " + "; ".join(parts)
 
 
 def export_three_way_with_notes(
