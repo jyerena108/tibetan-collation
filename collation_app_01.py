@@ -551,7 +551,10 @@ def export_three_way_with_notes(
         has_real_diff = (norm1 != "" and (diff12 or diff13)) or v1_missing
         note_start_here = False
 
-        if has_real_diff and not note_active:
+        # Every differing cell gets its own note. Adjacent differences are
+        # separate variants (e.g. a particle change followed by a word
+        # change), so grouping them would silently drop all but the first.
+        if has_real_diff:
             note_text = build_note_text(
                 seg1, seg2, seg3,
                 two_way=two_way, positive=positive, ignore_shad=ignore_shad,
@@ -640,6 +643,7 @@ def export_golden_with_footnotes(
     name1="base",
     ignore_shad=True,
     milestones=None,
+    positive=False,
 ):
     """Golden text with variant footnotes.
 
@@ -712,10 +716,18 @@ def export_golden_with_footnotes(
         has_real_diff = (norm1 != "" and (diff12 or diff13)) or v1_missing
         note_start_here = False
 
-        if has_real_diff and not note_active:
-            note_index += 1
-            note_start_here = True
-            note_active = True
+        # Mirrors the note loop in export_three_way_with_notes exactly: one
+        # note per differing cell, counted only when it yields note text, so
+        # the footnote numbering stays in lockstep with the notes list.
+        if has_real_diff:
+            if build_note_text(
+                seg1, seg2, seg3,
+                two_way=two_way, positive=positive, ignore_shad=ignore_shad,
+                label1=label1, label2=label2, label3=label3,
+            ):
+                note_index += 1
+                note_start_here = True
+                note_active = True
 
         place_note = note_start_here and 1 <= note_index <= len(notes)
 
@@ -974,6 +986,7 @@ if run_btn and ready:
                 name1=name1,
                 ignore_shad=ignore_shad,
                 milestones=golden_milestones,
+                positive=positive,
             )
     except AttributeError:
         st.warning(
