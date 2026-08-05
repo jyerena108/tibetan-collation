@@ -199,13 +199,19 @@ def strip_ignorable(s: str, ignore_shad: bool = True) -> str:
     When ignore_shad is True (default), shad punctuation is also stripped, so
     shad-only differences won't generate notes. When False, shad is preserved
     and therefore shad differences will surface as variant notes.
+
+    Any whitespace is dropped, not just the ASCII space — OCR leaves
+    non-breaking spaces (U+00A0) and the like, which the syllable splitter
+    already treats as separators. Ignoring them here too keeps the comparison
+    key consistent with the display, so an invisible space can't masquerade as
+    content and produce an empty "om.] … om." note.
     """
     ignore_set = PUNCT_TO_IGNORE if ignore_shad else PUNCT_TO_IGNORE_BASE
     if not ignore_shad and "|" in SHAD_CHARS:
         # "|" and "/" are the same shad in different notation; when shad is
         # kept for comparison they must not read as a difference.
         s = s.replace("|", "/")
-    return "".join(ch for ch in s if ch not in ignore_set)
+    return "".join(ch for ch in s if ch not in ignore_set and not ch.isspace())
 
 
 _SEP_CHARS = set(["་", "༌", " ", "\t", "\n"])
