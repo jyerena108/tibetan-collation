@@ -12,12 +12,14 @@ Run with:
 import io
 import re
 import tempfile
+from collections import namedtuple
 from pathlib import Path
 
 import streamlit as st
 from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_LINE_SPACING
+from docx.enum.section import WD_ORIENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
@@ -178,6 +180,20 @@ def apply_preprocessing_options(
 #  CORE LOGIC (unchanged from your script)
 # ─────────────────────────────────────────────
 
+def set_landscape(document):
+    """Turn the document landscape.
+
+    python-docx does not swap the page dimensions when the orientation is
+    changed, so width and height have to be exchanged by hand \u2014 otherwise Word
+    still lays the page out portrait and the setting appears to do nothing.
+    """
+    for section in document.sections:
+        w, h = section.page_width, section.page_height
+        if w < h:
+            section.orientation = WD_ORIENT.LANDSCAPE
+            section.page_width, section.page_height = h, w
+
+
 def ensure_footnote_reference_style(document):
     """Define the FootnoteReference character style with superscript.
 
@@ -299,50 +315,29 @@ def _reattach_stranded_achung(*rows):
     return rows
 
 
-def align_three(text1: str, text2: str, text3: str):
+def align_witnesses(texts):
+    """Align any number of witnesses against the first one (the base).
+
+    Pydurma's FDMPaligner diffs every other witness against the base and sizes
+    its matrix to the number of witnesses, so 2..N texts work with no change to
+    the vendored library. It pops the base off the lists it is handed, so
+    copies go in and the caller's data is left intact.
+    """
     normalizer = GenericNormalizer()
     encoder = Encoder()
     tokenizer = GenericTokenizer(encoder, normalizer)
     aligner = FDMPaligner()
 
-    tokens1, tokenstr1 = tokenizer.tokenize(text1)
-    tokens2, tokenstr2 = tokenizer.tokenize(text2)
-    tokens3, tokenstr3 = tokenizer.tokenize(text3)
+    pairs = [tokenizer.tokenize(t) for t in texts]
+    token_lists = [p[0] for p in pairs]
+    token_strings = [p[1] for p in pairs]
 
-    matrix = aligner.get_alignment_matrix(
-        [tokenstr1, tokenstr2, tokenstr3],
-        [tokens1, tokens2, tokens3],
-    )
+    matrix = aligner.get_alignment_matrix(list(token_strings), list(token_lists))
     row_matrix = column_matrix_to_row_matrix(matrix)
 
-    aligned1 = token_row_to_text_row(row_matrix[0], text1)
-    aligned2 = token_row_to_text_row(row_matrix[1], text2)
-    aligned3 = token_row_to_text_row(row_matrix[2], text3)
-    _reattach_stranded_achung(aligned1, aligned2, aligned3)
-    return aligned1, aligned2, aligned3
-
-
-def align_two(text1: str, text2: str):
-    """2-way alignment. Returns aligned3 as None to signal single-comparison mode."""
-    normalizer = GenericNormalizer()
-    encoder = Encoder()
-    tokenizer = GenericTokenizer(encoder, normalizer)
-    aligner = FDMPaligner()
-
-    tokens1, tokenstr1 = tokenizer.tokenize(text1)
-    tokens2, tokenstr2 = tokenizer.tokenize(text2)
-
-    matrix = aligner.get_alignment_matrix(
-        [tokenstr1, tokenstr2],
-        [tokens1, tokens2],
-    )
-    row_matrix = column_matrix_to_row_matrix(matrix)
-
-    aligned1 = token_row_to_text_row(row_matrix[0], text1)
-    aligned2 = token_row_to_text_row(row_matrix[1], text2)
-    _reattach_stranded_achung(aligned1, aligned2)
-    # None signals to export functions that there is no third version
-    return aligned1, aligned2, None
+    aligned = [token_row_to_text_row(row_matrix[i], t) for i, t in enumerate(texts)]
+    _reattach_stranded_achung(*aligned)
+    return aligned
 
 
 def set_run_background_color(run, hex_color: str):
@@ -451,71 +446,46 @@ def _reading_display(sylls) -> str:
     return joiner.join(sylls)
 
 
-def build_note_text(
-    seg1, seg2, seg3,
-    two_way=False,
-    positive=False,
-    ignore_shad=True,
-    label1="V1", label2="V2", label3="V3",
-) -> str:
+def build_note_text(segs, labels, positive=False, ignore_shad=True):
     """Build a single apparatus note in classic critical-edition style.
 
-    Format: ``<baseSiglum> <lemma>] <sigla> <reading>; <sigla> <reading>``
+    ``segs`` and ``labels`` are base-first: index 0 is the base/golden witness
+    and the rest are comparison witnesses, however many there are. Returns
+    ``(note_text, lemma)``; note_text is "" when no witness differs.
 
-    - The lemma is the base/golden reading (or ``om.`` when the base omits it),
-      and is itself labelled with the base siglum so it can be moved into the
-      variant list unchanged if the base is later reassigned.
+    Format: ``<baseSigla> <lemma>] <sigla> <reading>; <sigla> <reading>``
+
+    - The lemma is the base reading (or ``om.`` when the base omits it), and is
+      itself labelled with the base siglum so it can be moved into the variant
+      list unchanged if the base is later reassigned.
     - Sigla precede the reading they belong to on both sides of the bracket.
-      Sigla that share a reading are comma-separated (``AB1, GB1``); distinct
+      Sigla sharing a reading are comma-separated (``V2, V4``); distinct
       readings are separated by ``; ``. No colon is used.
     - Multi-syllable segments are reduced to just the differing syllable(s):
-      syllables shared by every witness are trimmed away, and the surviving
-      syllables keep their tsheg separators so they read correctly.
+      syllables shared by every witness are trimmed away, and the survivors
+      keep their tsheg separators so they read correctly.
     - Negative apparatus (default): only witnesses that differ from the lemma
-      are listed. A positive apparatus additionally credits the witnesses
-      that agree with the base by listing their sigla with the lemma
-      (``BX1, AB1 la] GB1 pa``) instead of repeating the reading.
-
-    Witnesses sharing the same reading are grouped, e.g. ``GX1, GB1 ...``.
+      are listed. A positive apparatus additionally credits the witnesses that
+      agree by listing their sigla with the lemma (``V1, V3 la] V2 pa``)
+      instead of repeating the reading.
     """
     # comparison keys (punctuation/tsheg-insensitive) decide agreement
-    key1 = strip_ignorable(seg1, ignore_shad)
-    key2 = strip_ignorable(seg2, ignore_shad)
-    key3 = "" if two_way else strip_ignorable(seg3, ignore_shad)
+    keys = [strip_ignorable(s, ignore_shad) for s in segs]
+    # display syllables, with syllables shared by every witness trimmed away
+    trimmed = _trim_common_syllables([_syllables(s, ignore_shad) for s in segs])
 
-    # display syllable lists (tsheg preserved between syllables)
-    s1 = _syllables(seg1, ignore_shad)
-    s2 = _syllables(seg2, ignore_shad)
-    s3 = [] if two_way else _syllables(seg3, ignore_shad)
+    lemma = _reading_display(trimmed[0])
+    base_key = keys[0]
 
-    # isolate the differing syllable(s) by trimming shared context
-    all_readings = [s1, s2] if two_way else [s1, s2, s3]
-    trimmed = _trim_common_syllables(all_readings)
-    if two_way:
-        t1, t2 = trimmed
-        t3 = []
-    else:
-        t1, t2, t3 = trimmed
-
-    lemma = _reading_display(t1)
-
-    # (label, comparison_key, trimmed_syllables) per comparison witness
-    witnesses = [(label2, key2, t2)]
-    if not two_way:
-        witnesses.append((label3, key3, t3))
-
-    # Witnesses agreeing with the base support the lemma. A positive
-    # apparatus records that by listing their sigla with the lemma —
-    # "BX1, AB1 la] GB1 pa" — rather than repeating the reading as a
-    # variant. A negative apparatus leaves them out entirely.
-    lemma_labels = [label1]
+    lemma_labels = [labels[0]]
     if positive:
-        lemma_labels += [lab for (lab, k, t) in witnesses if k == key1]
+        lemma_labels += [labels[i] for i in range(1, len(segs)) if keys[i] == base_key]
 
-    selected = [(lab, t) for (lab, k, t) in witnesses if k != key1]
-
+    selected = [
+        (labels[i], trimmed[i]) for i in range(1, len(segs)) if keys[i] != base_key
+    ]
     if not selected:
-        return ""
+        return "", lemma
 
     # group witnesses that share the same displayed reading, preserving order
     groups = []  # list of [reading_display, [labels...]]
@@ -529,118 +499,137 @@ def build_note_text(
             groups.append([disp, [lab]])
 
     parts = [f"{', '.join(labs)} {disp}" for disp, labs in groups]
-    return f"{', '.join(lemma_labels)} {lemma}] " + "; ".join(parts)
+    return f"{', '.join(lemma_labels)} {lemma}] " + "; ".join(parts), lemma
 
 
-def export_three_way_with_notes(
-    aligned1, aligned2, aligned3,
-    label1, label2, label3,
-    name1="base", name2="comp1", name3="comp2",
-    ignore_shad=True,
-    positive=False,
-):
-    two_way = aligned3 is None  # single-comparison mode
+# One record per aligned cell, shared by both exporters.
+CollatedCell = namedtuple(
+    "CollatedCell", "segs norms diffs base_missing has_diff note lemma"
+)
 
+
+def collate_cells(aligned, labels, ignore_shad=True, positive=False):
+    """Walk the aligned rows once and decide everything about each cell.
+
+    The report and the golden document used to run separate copies of this
+    logic, each calling build_note_text() itself. The copies had to be kept
+    identical by hand: if they ever disagreed about whether a cell yields a
+    note, every footnote from that point on attached to the wrong word while
+    still looking correctly numbered. Deciding once, here, removes that whole
+    failure mode — both exporters consume this list.
+
+    ``aligned`` is base-first, one row per witness; "-" marks an aligner gap.
+    """
+    n = len(aligned)
+    width = max((len(r) for r in aligned), default=0)
+    rows = [list(r) + [""] * (width - len(r)) for r in aligned]
+
+    cells = []
+    for j in range(width):
+        raw = [rows[i][j] for i in range(n)]
+        segs = ["" if c == "-" else c for c in raw]
+        norms = [strip_ignorable(s, ignore_shad) for s in segs]
+        base_norm = norms[0]
+
+        # A witness omits the base's reading when its cell is a gap, or holds
+        # only ignorable characters, while the base actually has content there.
+        missing = [
+            (raw[i] == "-" or (segs[i] and norms[i] == "")) and base_norm != ""
+            for i in range(1, n)
+        ]
+        base_missing = base_norm == "" and any(norms[i] != "" for i in range(1, n))
+
+        diffs = []
+        for i in range(1, n):
+            if missing[i - 1]:
+                diffs.append(True)
+            elif base_norm or norms[i]:
+                diffs.append(base_norm != norms[i])
+            else:
+                diffs.append(False)
+
+        has_diff = (base_norm != "" and any(diffs)) or base_missing
+
+        note, lemma = "", ""
+        if has_diff:
+            note, lemma = build_note_text(
+                segs, labels, positive=positive, ignore_shad=ignore_shad
+            )
+
+        cells.append(
+            CollatedCell(segs, norms, diffs, base_missing, has_diff, note, lemma)
+        )
+    return cells
+
+
+def export_collation_report(cells, labels, names):
+    """Side-by-side table of every witness, plus the numbered notes list.
+
+    The page is landscape: with up to six witness columns a portrait page
+    squeezes Tibetan script too narrow to read comfortably.
+    """
     doc = Document()
+    set_landscape(doc)
     doc.add_heading("Tibetan Collation Report", level=1)
-    if two_way:
-        doc.add_paragraph(f"Base / golden: {name1}  |  Comparison: {name2}")
-    else:
-        doc.add_paragraph(f"Base / golden: {name1}  |  Comparison 1: {name2}  |  Comparison 2: {name3}")
+    header = f"Base / golden: {names[0]}"
+    for i, nm in enumerate(names[1:], start=1):
+        header += f"  |  Comparison {i}: {nm}"
+    doc.add_paragraph(header)
 
-    num_cols = 2 if two_way else 3
-    table = doc.add_table(rows=2, cols=num_cols)
+    n = len(labels)
+    table = doc.add_table(rows=2, cols=n)
     hdr = table.rows[0].cells
-    hdr[0].text = f"{label1} (golden, notes)"
-    hdr[1].text = label2
-    if not two_way:
-        hdr[2].text = label3
+    hdr[0].text = f"{labels[0]} (golden, notes)"
+    for i in range(1, n):
+        hdr[i].text = labels[i]
 
-    row = table.rows[1].cells
-    p_v1 = row[0].paragraphs[0]
-    p_v2 = row[1].paragraphs[0]
-    p_v3 = row[2].paragraphs[0] if not two_way else None
-
-    if two_way:
-        aligned3 = []  # empty — never iterated directly
-    max_len = max(len(aligned1), len(aligned2), len(aligned3) if aligned3 else 0)
-    a1 = list(aligned1) + [""] * (max_len - len(aligned1))
-    a2 = list(aligned2) + [""] * (max_len - len(aligned2))
-    a3 = list(aligned3) + [""] * (max_len - len(aligned3)) if not two_way else [""] * max_len
+    paras = [table.rows[1].cells[i].paragraphs[0] for i in range(n)]
 
     notes = []
     note_active = False
     current_note_color = None
     color_idx = -1
 
-    for seg1, seg2, seg3 in zip(a1, a2, a3):
-        seg2_raw = seg2
-        seg3_raw = seg3 if not two_way else ""
-        seg1 = "" if seg1 == "-" else seg1
-        seg2 = "" if seg2 == "-" else seg2
-        seg3 = "" if (two_way or seg3 == "-") else seg3
-
-        norm1 = strip_ignorable(seg1, ignore_shad)
-        norm2 = strip_ignorable(seg2, ignore_shad)
-        norm3 = "" if two_way else strip_ignorable(seg3, ignore_shad)
-
-        v2_missing = (seg2_raw == "-" or (seg2 and norm2 == "")) and norm1 != ""
-        v3_missing = False if two_way else ((seg3_raw == "-" or (seg3 and norm3 == "")) and norm1 != "")
-        v1_missing = (norm1 == "" and (norm2 != "" or (not two_way and norm3 != "")))
-
-        diff12 = True if v2_missing else (norm1 != norm2) if norm1 or norm2 else False
-        diff13 = False if two_way else (True if v3_missing else (norm1 != norm3) if norm1 or norm3 else False)
-
-        has_real_diff = (norm1 != "" and (diff12 or diff13)) or v1_missing
-        note_start_here = False
-
+    for cell in cells:
         # Every differing cell gets its own note. Adjacent differences are
         # separate variants (e.g. a particle change followed by a word
         # change), so grouping them would silently drop all but the first.
-        if has_real_diff:
-            note_text = build_note_text(
-                seg1, seg2, seg3,
-                two_way=two_way, positive=positive, ignore_shad=ignore_shad,
-                label1=label1, label2=label2, label3=label3,
-            )
-            if note_text:
-                notes.append(note_text)
-                note_start_here = True
-                note_active = True
-                color_idx = (color_idx + 1) % len(COLOR_LIST)
-                current_note_color = COLOR_LIST[color_idx]
+        note_start_here = False
+        if cell.note:
+            notes.append(cell.note)
+            note_start_here = True
+            note_active = True
+            color_idx = (color_idx + 1) % len(COLOR_LIST)
+            current_note_color = COLOR_LIST[color_idx]
 
         color = current_note_color if note_active else None
         note_number = len(notes)
 
-        if seg1:
-            run1 = p_v1.add_run(seg1)
-            if color and (diff12 or diff13) and norm1 != "":
-                set_run_background_color(run1, color)
+        seg = cell.segs[0]
+        if seg:
+            run = paras[0].add_run(seg)
+            if color and any(cell.diffs) and cell.norms[0] != "":
+                set_run_background_color(run, color)
             if note_start_here:
-                m = p_v1.add_run(f"[{note_number}]")
+                m = paras[0].add_run(f"[{note_number}]")
                 m.font.superscript = True
         elif note_start_here:
-            m = p_v1.add_run(f"[{note_number}]")
+            m = paras[0].add_run(f"[{note_number}]")
             m.font.superscript = True
 
-        if seg2:
-            run2 = p_v2.add_run(seg2)
-            if color and (diff12 or v1_missing) and norm2 != "":
-                set_run_background_color(run2, color)
-            if note_start_here and (diff12 or v1_missing):
-                m = p_v2.add_run(f"[{note_number}]")
+        for i in range(1, n):
+            seg_i = cell.segs[i]
+            if not seg_i:
+                continue
+            differs = cell.diffs[i - 1] or cell.base_missing
+            run = paras[i].add_run(seg_i)
+            if color and differs and cell.norms[i] != "":
+                set_run_background_color(run, color)
+            if note_start_here and differs:
+                m = paras[i].add_run(f"[{note_number}]")
                 m.font.superscript = True
 
-        if not two_way and p_v3 is not None and seg3:
-            run3 = p_v3.add_run(seg3)
-            if color and (diff13 or v1_missing) and norm3 != "":
-                set_run_background_color(run3, color)
-            if note_start_here and (diff13 or v1_missing):
-                m = p_v3.add_run(f"[{note_number}]")
-                m.font.superscript = True
-
-        if note_active and not has_real_diff:
+        if note_active and not cell.has_diff:
             note_active = False
             current_note_color = None
 
@@ -661,42 +650,30 @@ def export_three_way_with_notes(
     return buf, notes
 
 
-def _note_lemma_is_shad(note_text: str, label1: str) -> bool:
-    """True when a note's lemma consists only of shad punctuation.
+def _is_shad_only(lemma: str) -> bool:
+    """True when a note's lemma is nothing but shad punctuation.
 
-    Notes read ``<siglum> <lemma>] <variants>``; the lemma is what the
-    footnote mark should sit on. When it is a shad, the mark must stay on
-    the shad instead of moving back onto the preceding word.
+    The lemma is what the footnote mark should sit on; when it is a shad the
+    mark must stay there rather than move back onto the preceding word. The
+    lemma now comes straight from build_note_text() instead of being re-parsed
+    out of the finished note string, which also fixes the positive-apparatus
+    case where the lemma carries several sigla ("V1, V3 /] …").
     """
-    close = note_text.find("]")
-    if close <= 0:
-        return False
-    lemma = note_text[:close]
-    prefix = label1 + " "
-    if lemma.startswith(prefix):
-        lemma = lemma[len(prefix):]
-    lemma = lemma.strip()
     return bool(lemma) and all(c in SHAD_CHARS or c.isspace() for c in lemma)
 
 
-def export_golden_with_footnotes(
-    aligned1, aligned2, aligned3,
-    notes,
-    label1, label2, label3,
-    name1="base",
-    ignore_shad=True,
-    milestones=None,
-    positive=False,
-):
+def export_golden_with_footnotes(cells, notes, labels, name1="base", milestones=None):
     """Golden text with variant footnotes.
+
+    ``cells`` is the very list the report was built from, so footnote numbering
+    matches the report's notes by construction rather than by keeping a second
+    copy of the diff logic in step with the first.
 
     ``milestones`` is an optional list of ``(offset, tag)`` pairs from
     extract_folio_tags(): folio/page tags stripped before collation that are
     re-inserted here — as italic runs at their original character positions —
     without ever having been part of the alignment or the apparatus.
     """
-    two_way = aligned3 is None
-
     milestones = sorted(milestones) if milestones else []
     ms_index = 0  # next milestone still to be emitted
     char_pos = 0  # running offset into the (concatenated) base text
@@ -719,62 +696,25 @@ def export_golden_with_footnotes(
         char_pos = end_pos
 
     doc = Document()
-    doc.add_heading(f"{label1} with Footnotes", level=1)
-    if two_way:
-        doc.add_paragraph(f"Base: {name1}  |  Footnotes from comparison with {label2}.")
+    doc.add_heading(f"{labels[0]} with Footnotes", level=1)
+    if len(labels) > 2:
+        others = ", ".join(labels[1:-1]) + " and " + labels[-1]
     else:
-        doc.add_paragraph(f"Base: {name1}  |  Footnotes from comparison with {label2} and {label3}.")
+        others = labels[1]
+    doc.add_paragraph(f"Base: {name1}  |  Footnotes from comparison with {others}.")
     doc.add_paragraph()
 
     p_text = doc.add_paragraph()
 
-    if two_way:
-        aligned3 = []
-    max_len = max(len(aligned1), len(aligned2), len(aligned3) if aligned3 else 0)
-    a1 = list(aligned1) + [""] * (max_len - len(aligned1))
-    a2 = list(aligned2) + [""] * (max_len - len(aligned2))
-    a3 = list(aligned3) + [""] * (max_len - len(aligned3)) if not two_way else [""] * max_len
-
-    note_active = False
     note_index = 0
-
-    for seg1, seg2, seg3 in zip(a1, a2, a3):
-        seg2_raw = seg2
-        seg3_raw = seg3 if not two_way else ""
-        seg1 = "" if seg1 == "-" else seg1
-        seg2 = "" if seg2 == "-" else seg2
-        seg3 = "" if (two_way or seg3 == "-") else seg3
-
-        norm1 = strip_ignorable(seg1, ignore_shad)
-        norm2 = strip_ignorable(seg2, ignore_shad)
-        norm3 = "" if two_way else strip_ignorable(seg3, ignore_shad)
-
-        v2_missing = (seg2_raw == "-" or (seg2 and norm2 == "")) and norm1 != ""
-        v3_missing = False if two_way else ((seg3_raw == "-" or (seg3 and norm3 == "")) and norm1 != "")
-        v1_missing = (norm1 == "" and (norm2 != "" or (not two_way and norm3 != "")))
-
-        diff12 = True if v2_missing else (norm1 != norm2) if norm1 or norm2 else False
-        diff13 = False if two_way else (True if v3_missing else (norm1 != norm3) if norm1 or norm3 else False)
-
-        has_real_diff = (norm1 != "" and (diff12 or diff13)) or v1_missing
-        note_start_here = False
-
-        # Mirrors the note loop in export_three_way_with_notes exactly: one
-        # note per differing cell, counted only when it yields note text, so
-        # the footnote numbering stays in lockstep with the notes list.
-        if has_real_diff:
-            if build_note_text(
-                seg1, seg2, seg3,
-                two_way=two_way, positive=positive, ignore_shad=ignore_shad,
-                label1=label1, label2=label2, label3=label3,
-            ):
-                note_index += 1
-                note_start_here = True
-                note_active = True
-
+    for cell in cells:
+        seg = cell.segs[0]
+        note_start_here = bool(cell.note)
+        if note_start_here:
+            note_index += 1
         place_note = note_start_here and 1 <= note_index <= len(notes)
 
-        if place_note and seg1:
+        if place_note and seg:
             # Put the reference mark right after the annotated word, before any
             # trailing space or shad, so it renders as "su² gyur" not
             # "su ²gyur" and "grag go²/" not "grag go/²".
@@ -782,35 +722,29 @@ def export_golden_with_footnotes(
             # Exception: when the lemma *is* a shad (only possible with shad
             # differences reported), the note is about that shad, so the mark
             # must stay on it rather than jump back to the preceding word.
-            # The test has to use the note's lemma rather than the raw
-            # segment: a segment often holds a word and a shad together
-            # ("cing / "), while the lemma is trimmed down to just "/".
-            lemma_is_shad = _note_lemma_is_shad(notes[note_index - 1], label1)
-            cut = len(seg1)
+            lemma_is_shad = _is_shad_only(cell.lemma)
+            cut = len(seg)
             if not lemma_is_shad:
-                while cut > 0 and (seg1[cut - 1].isspace() or seg1[cut - 1] in SHAD_CHARS
-                                   or seg1[cut - 1] in PUNCT_TO_IGNORE_BASE):
+                while cut > 0 and (seg[cut - 1].isspace() or seg[cut - 1] in SHAD_CHARS
+                                   or seg[cut - 1] in PUNCT_TO_IGNORE_BASE):
                     cut -= 1
             else:
-                while cut > 0 and seg1[cut - 1].isspace():
+                while cut > 0 and seg[cut - 1].isspace():
                     cut -= 1
             if cut == 0:  # nothing to anchor to — keep the original placement
-                cut = len(seg1.rstrip())
-            content = seg1[:cut]
-            trailing = seg1[cut:]
+                cut = len(seg.rstrip())
+            content = seg[:cut]
+            trailing = seg[cut:]
             if content:
                 emit(p_text, content)
             p_text.add_footnote(notes[note_index - 1])
             if trailing:
                 emit(p_text, trailing)
         else:
-            if seg1:
-                emit(p_text, seg1)
+            if seg:
+                emit(p_text, seg)
             if place_note:
                 p_text.add_footnote(notes[note_index - 1])
-
-        if note_active and not has_real_diff:
-            note_active = False
 
     # Any milestone past the last emitted character (e.g. a tag at the very
     # end of the base text) still needs to be written out.
@@ -866,33 +800,41 @@ with col_a:
         type=["txt"],
         help="This is the primary version — all notes are anchored here.",
     )
-    label1 = st.text_input("Label for base text", value="BX1")
+    label1 = st.text_input("Label for base text", value="V1")
 
 with col_b:
-    comp_mode = st.radio(
-        "Number of comparison texts",
-        options=["1 comparison text", "2 comparison texts"],
-        index=1,
+    n_comp = int(
+        st.number_input(
+            "Number of comparison texts",
+            min_value=1,
+            max_value=5,
+            value=2,
+            step=1,
+            help="Up to five witnesses can be collated against the base.",
+        )
     )
 
 st.divider()
 st.subheader("2 · Comparison text(s)")
 
-two_texts = comp_mode == "2 comparison texts"
-
-col1, col2 = st.columns(2) if two_texts else (st.columns(1)[0], None)
-
-with col1:
-    comp1_file = st.file_uploader("Comparison text 1 (.txt)", type=["txt"], key="c1")
-    label2 = st.text_input("Label for comparison 1", value="GX1")
-
-if two_texts and col2 is not None:
-    with col2:
-        comp2_file = st.file_uploader("Comparison text 2 (.txt)", type=["txt"], key="c2")
-        label3 = st.text_input("Label for comparison 2", value="GB1")
-else:
-    comp2_file = None
-    label3 = "—"
+# Laid out three to a row so five uploaders stay readable.
+comp_files = []
+comp_labels = []
+_cols = st.columns(min(n_comp, 3))
+for _i in range(n_comp):
+    with _cols[_i % len(_cols)]:
+        comp_files.append(
+            st.file_uploader(
+                f"Comparison text {_i + 1} (.txt)", type=["txt"], key=f"c{_i + 1}"
+            )
+        )
+        comp_labels.append(
+            st.text_input(
+                f"Label for comparison {_i + 1}",
+                value=f"V{_i + 2}",
+                key=f"lab{_i + 1}",
+            )
+        )
 
 st.divider()
 st.subheader("3 · Options")
@@ -959,9 +901,7 @@ positive = apparatus_mode.startswith("Positive")
 
 st.subheader("4 · Run")
 
-ready = base_file is not None and comp1_file is not None
-if two_texts:
-    ready = ready and comp2_file is not None
+ready = base_file is not None and all(f is not None for f in comp_files)
 
 if not ready:
     st.info("Upload all required files above to enable the collation.")
@@ -969,19 +909,25 @@ if not ready:
 run_btn = st.button("▶ Run Collation", disabled=not ready, type="primary")
 
 if run_btn and ready:
+    uploads = [base_file] + comp_files
+    labels = [label1] + comp_labels
+    names = [f.name for f in uploads]
+
     # .getvalue() (not .read()) — Streamlit keeps the uploaded file's read
     # cursor across reruns, so a second Run would read empty bytes and
     # silently reuse the previous results.
-    text1, enc1 = decode_upload(base_file.getvalue())
-    text2, enc2 = decode_upload(comp1_file.getvalue())
-    text3, enc3 = decode_upload(comp2_file.getvalue()) if comp2_file else ("", None)
+    texts, encodings = [], []
+    for f in uploads:
+        _t, _e = decode_upload(f.getvalue())
+        texts.append(_t)
+        encodings.append(_e)
 
     # A non-UTF-8 file is read on a best guess, so say so: a wrong guess
     # surfaces as odd characters in the notes rather than as an error.
-    for _f, _enc in ((base_file, enc1), (comp1_file, enc2), (comp2_file, enc3)):
-        if _f is not None and _enc is not None and _enc != "UTF-8":
+    for _nm, _e in zip(names, encodings):
+        if _e != "UTF-8":
             st.warning(
-                f"**{_f.name}** is not UTF-8 — read as **{_enc}**. The "
+                f"**{_nm}** is not UTF-8 — read as **{_e}**. The "
                 "collation will run; check the output for odd characters, "
                 "and re-save the file as UTF-8 to remove any doubt."
             )
@@ -992,20 +938,17 @@ if run_btn and ready:
         pipe_as_shad=prep_pipe,
         ignore_head_marks=prep_head,
     )
-    prep_preview = {}
-    names_texts = [(base_file.name, text1), (comp1_file.name, text2)]
-    if comp2_file:
-        names_texts.append((comp2_file.name, text3))
-    for fname, ftext in names_texts:
-        prep_preview[fname] = count_preprocessing_hits(ftext)
+    # Counted before cleanup is applied, so the preview reflects the input.
+    prep_preview = {nm: count_preprocessing_hits(t) for nm, t in zip(names, texts)}
+
     golden_milestones = None
     if prep_tags:
         if prep_keep_tags:
-            text1, golden_milestones = extract_folio_tags(text1)
+            texts[0], golden_milestones = extract_folio_tags(texts[0])
         else:
-            text1 = strip_folio_tags(text1)
-        text2 = strip_folio_tags(text2)
-        text3 = strip_folio_tags(text3) if text3 else text3
+            texts[0] = strip_folio_tags(texts[0])
+        for _i in range(1, len(texts)):
+            texts[_i] = strip_folio_tags(texts[_i])
 
     with st.expander("Preprocessing preview", expanded=False):
         st.caption(
@@ -1017,35 +960,19 @@ if run_btn and ready:
             st.markdown(f"- **{fname}** — {hits}")
 
     with st.spinner("Aligning texts… this may take a minute for long texts."):
-        if two_texts:
-            aligned1, aligned2, aligned3 = align_three(text1, text2, text3)
-        else:
-            aligned1, aligned2, aligned3 = align_two(text1, text2)
+        aligned = align_witnesses(texts)
 
     with st.spinner("Building collation report…"):
-        name1 = base_file.name
-        name2 = comp1_file.name
-        name3 = comp2_file.name if comp2_file else "—"
-
-        report_buf, notes = export_three_way_with_notes(
-            aligned1, aligned2, aligned3,
-            label1, label2, label3,
-            name1=name1, name2=name2, name3=name3,
-            ignore_shad=ignore_shad,
-            positive=positive,
+        cells = collate_cells(
+            aligned, labels, ignore_shad=ignore_shad, positive=positive
         )
+        report_buf, notes = export_collation_report(cells, labels, names)
 
     footnote_buf = None
     try:
         with st.spinner("Building footnote document…"):
             footnote_buf = export_golden_with_footnotes(
-                aligned1, aligned2, aligned3,
-                notes,
-                label1, label2, label3,
-                name1=name1,
-                ignore_shad=ignore_shad,
-                milestones=golden_milestones,
-                positive=positive,
+                cells, notes, labels, name1=names[0], milestones=golden_milestones
             )
     except AttributeError:
         st.warning(
@@ -1094,7 +1021,7 @@ with st.expander("ℹ️ About this tool"):
 and generates a critical apparatus in Word format. Works with Unicode Tibetan
 and Wylie/EWTS transliteration.
 
-Notes read `BX1 kyi] AB1, GB1 ni` — *where BX1 reads `kyi`, AB1 and GB1 read
+Notes read `V1 kyi] V2, V3 ni` — *where V1 reads `kyi`, V2 and V3 read
 `ni`*. Omissions are marked `om.`
 
 **How to cite**

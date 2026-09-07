@@ -1,12 +1,13 @@
 # Tibetan Collation Tool
 
 A web app for collating Tibetan texts and producing a critical apparatus in
-Word format. Upload two or three versions of a text, and the tool aligns them,
+Word format. Upload a base text and up to five comparison versions, and the
+tool aligns them,
 finds the differences, and generates the notes for you.
 
 It works with both Unicode Tibetan (བོད་ཡིག) and Wylie/EWTS transliteration.
 
-> **Live app:** _add your Streamlit URL here_
+> **Live app:** <https://tibetan-collation-001.streamlit.app/>
 
 ---
 
@@ -16,17 +17,17 @@ Two Word documents:
 
 | File | Contents |
 |---|---|
-| **Collation report** | A numbered list of every variant found |
+| **Collation report** | Every witness side by side, plus a numbered list of each variant. Landscape, so six columns still fit |
 | **Golden text + footnotes** | Your base text with real Word footnotes at each variant |
 
 Notes follow standard critical-edition style, with the siglum before the
 reading on both sides of the bracket:
 
 ```
-BX1 kyi] AB1, GB1 ni
+V1 kyi] V2, V3 ni
 ```
 
-Read as: *where BX1 reads `kyi`, witnesses AB1 and GB1 read `ni`.* Witnesses
+Read as: *where V1 reads `kyi`, witnesses V2 and V3 read `ni`.* Witnesses
 sharing a reading are grouped with commas; different readings are separated by
 `;`. An omission is marked `om.`. The lemma carries its own siglum, so it can
 be moved into the variant list unchanged if you later reassign the base text.
@@ -41,10 +42,16 @@ agree on the surrounding words, those are trimmed away.
 ### 1 · Upload texts
 
 Upload a **base (golden) text** — this is the version the apparatus is
-anchored to — and one or two **comparison texts**. Plain `.txt`, UTF-8.
+anchored to — and **one to five comparison texts**. Plain `.txt`.
 
-Give each one a **siglum** (short label like `BX1`, `AB1`, `GB1`). These are
-what appear in the notes.
+Give each one a **siglum** (short label like `V1`, `V2`, `V3`). These are what
+appear in the notes; the defaults are `V1` for the base and `V2`…`V6` for the
+comparisons, and you can rename them to whatever your edition uses.
+
+Files are read as UTF-8. If a file turns out not to be UTF-8 — PDF extractors
+and older Mac tools often write Mac OS Roman — it is decoded on a best guess
+instead of failing, and a notice tells you which encoding was used so you can
+check the output. Windows and classic-Mac line endings are normalized.
 
 ### 2 · Options
 
@@ -94,7 +101,8 @@ running again re-collates with the new settings.
   shad or space (`grag go¹²/`). When a note is *about* a shad, the mark stays
   on the shad instead.
 - **Your text is never rewritten.** The golden output reproduces the base
-  witness exactly as written, apart from folio tags you chose to strip.
+  witness exactly as written, apart from folio tags you chose to strip and
+  line endings, which are normalized when the file is read.
   Preprocessing affects how texts are *compared*, not what they say.
 
 ---
