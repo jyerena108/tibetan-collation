@@ -105,6 +105,43 @@ def count_preprocessing_hits(text: str) -> dict:
     }
 
 
+# ── Upload decoding ──────────────────────────────────────────────────
+# Uploads are not reliably UTF-8. OCR tools and PDF text extractors on macOS
+# still emit Mac OS Roman, in which 0xCA is a non-breaking space — an invalid
+# UTF-8 continuation byte. A bare .decode("utf-8") therefore killed the whole
+# run with a raw UnicodeDecodeError, which tells a translator nothing.
+#
+# Mac Roman maps all 256 byte values and so never raises; it is the terminal
+# fallback and anything listed after it would be unreachable. That means a
+# Windows-1252 file is read as Mac Roman, which decodes its non-ASCII bytes
+# differently — hence the UI reports which encoding was used, so a wrong guess
+# shows up as visible mojibake rather than passing silently.
+_UPLOAD_ENCODINGS = (
+    ("utf-8-sig", "UTF-8"),        # also strips a byte-order mark, if present
+    ("mac_roman", "Mac OS Roman"),
+)
+
+
+def decode_upload(raw: bytes):
+    """Decode an uploaded file, tolerating non-UTF-8 input.
+
+    Returns ``(text, encoding_label)``. Line endings are normalized to ``\n``:
+    classic-Mac files use bare CR, which otherwise arrives as one enormous
+    line and embeds stray carriage returns in the Word output. This is the
+    only rewriting done here — the text itself is passed through untouched.
+    """
+    for codec, label in _UPLOAD_ENCODINGS:
+        try:
+            text = raw.decode(codec)
+        except UnicodeDecodeError:
+            continue
+        return text.replace("\r\n", "\n").replace("\r", "\n"), label
+    # Not reachable while Mac Roman is in the table above, but keep the app
+    # alive rather than crashing if that table is ever narrowed.
+    text = raw.decode("utf-8", errors="replace")
+    return text.replace("\r\n", "\n").replace("\r", "\n"), "UTF-8 (damaged bytes replaced)"
+
+
 def apply_preprocessing_options(
     underscore_as_space=True,
     pipe_as_shad=True,
@@ -935,9 +972,19 @@ if run_btn and ready:
     # .getvalue() (not .read()) — Streamlit keeps the uploaded file's read
     # cursor across reruns, so a second Run would read empty bytes and
     # silently reuse the previous results.
-    text1 = base_file.getvalue().decode("utf-8")
-    text2 = comp1_file.getvalue().decode("utf-8")
-    text3 = comp2_file.getvalue().decode("utf-8") if comp2_file else ""
+    text1, enc1 = decode_upload(base_file.getvalue())
+    text2, enc2 = decode_upload(comp1_file.getvalue())
+    text3, enc3 = decode_upload(comp2_file.getvalue()) if comp2_file else ("", None)
+
+    # A non-UTF-8 file is read on a best guess, so say so: a wrong guess
+    # surfaces as odd characters in the notes rather than as an error.
+    for _f, _enc in ((base_file, enc1), (comp1_file, enc2), (comp2_file, enc3)):
+        if _f is not None and _enc is not None and _enc != "UTF-8":
+            st.warning(
+                f"**{_f.name}** is not UTF-8 — read as **{_enc}**. The "
+                "collation will run; check the output for odd characters, "
+                "and re-save the file as UTF-8 to remove any doubt."
+            )
 
     # Apply the user's preprocessing choices
     apply_preprocessing_options(
