@@ -53,6 +53,34 @@ and older Mac tools often write Mac OS Roman — it is decoded on a best guess
 instead of failing, and a notice tells you which encoding was used so you can
 check the output. Windows and classic-Mac line endings are normalized.
 
+**Page / folio markers**
+
+Each upload has its own **Are there any page markers?** question. Tick it and
+you are asked two things:
+
+- *Include the page marker in the footnote?* — whether that witness's page is
+  cited in the notes.
+- *First page marker, exactly as it appears* — paste the first one from that
+  file, e.g. `Pdf.50`, `p.292`, or `kha, 1r.1 (pdf 47)`.
+
+The pattern is worked out from that one example and the rest are found
+automatically, including changes of case (`Pdf.294` then `pdf.295`), of volume
+(`ka` then `kha`), and of side (`4r` then `4v`). A trailing parenthetical is
+optional, so a sample with `(pdf 47)` still matches markers without it.
+
+Markers are always removed before collation once a file declares them —
+otherwise they align as readings and produce spurious variants. Citing them in
+the notes is the separate, second choice. Every version keeps the format its
+own source uses; nothing is converted:
+
+```
+V1 (Pdf.50) lnga] V2 (P.272) lha; V3 (Pdf.292), V4 (Pdf.320) lta
+```
+
+If a file has page markers but the question is left unticked, the tool warns —
+Tibetan carries no digits of its own, so numbers surviving in the text are a
+reliable sign of pagination about to be read as a variant.
+
 ### 2 · Options
 
 **Apparatus type**
@@ -97,6 +125,11 @@ running again re-collates with the new settings.
 - **A-chung** — a lone a-chung (`འ` / `'`) stranded at an alignment boundary is
   reattached to the syllable it belongs to, so an added a-chung reads
   `gyur] 'gyur` rather than surfacing as a bare `'`.
+- **Typographic apostrophes** — word processors and OCR often turn the Wylie
+  a-chung into a curly quote (`’` or `‘`). These are folded onto the ASCII
+  apostrophe for comparison *and* in the notes, so `'gyur` and `’gyur` are not
+  reported as a variant and a note reads `'das`, not `‘das`. Your files are
+  not rewritten; the golden text still reproduces the base exactly.
 - **Footnote marks** are placed on the annotated word, before any trailing
   shad or space (`grag go¹²/`). When a note is *about* a shad, the mark stays
   on the shad instead.

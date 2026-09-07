@@ -107,6 +107,109 @@ def count_preprocessing_hits(text: str) -> dict:
     }
 
 
+# ── Page / folio markers ─────────────────────────────────────────────
+# Witnesses carry their pagination in whatever form their source used —
+# "p.292" from a PDF, "kha, 4r.7 (pdf 55)" from a pecha (volume, folio,
+# recto/verso, line). Rather than force one format, the user pastes the first
+# marker from each file and the shape is generalized from it: digit runs
+# become \d+ and letter runs [A-Za-z]+, so a sample from volume ka, folio 1
+# recto still matches later volumes and verso sides. A trailing parenthetical
+# is made optional, so a sample carrying "(pdf 47)" does not exclude markers
+# that omit it.
+
+
+def pattern_from_example(example: str) -> str:
+    """Generalize a sample page marker into a regex source string."""
+    out, i = [], 0
+    while i < len(example):
+        c = example[i]
+        if c.isdigit():
+            j = i
+            while j < len(example) and example[j].isdigit():
+                j += 1
+            out.append(r"\d+")
+            i = j
+        elif c.isalpha():
+            j = i
+            while j < len(example) and example[j].isalpha():
+                j += 1
+            out.append(r"[A-Za-z]+")
+            i = j
+        elif c.isspace():
+            j = i
+            while j < len(example) and example[j].isspace():
+                j += 1
+            out.append(r"\s+")
+            i = j
+        else:
+            out.append(re.escape(c))
+            i += 1
+    pat = "".join(out)
+    m = re.search(r"(?:\\s\+)?\\\(.*\\\)$", pat)
+    if m:
+        pat = pat[: m.start()] + "(?:" + pat[m.start():] + ")?"
+    return pat
+
+
+def extract_page_markers(text: str, example: str):
+    """Strip page markers from ``text``, remembering what and where.
+
+    Returns ``(stripped_text, markers)`` with markers as ``(offset, marker)``
+    pairs, the offset being the position in the *stripped* text from which that
+    marker's page applies. Markers must be removed before collation or they
+    align as readings and pollute the apparatus; their positions are what let a
+    note cite each witness's own pagination.
+    """
+    example = (example or "").strip()
+    if not example:
+        return text, []
+    try:
+        rx = re.compile(pattern_from_example(example))
+    except re.error:
+        return text, []
+    markers, out, pos, last = [], [], 0, 0
+    for m in rx.finditer(text):
+        out.append(text[last:m.start()])
+        pos += m.start() - last
+        markers.append((pos, m.group(0)))
+        out.append(" ")
+        pos += 1
+        last = m.end()
+    out.append(text[last:])
+    return "".join(out), markers
+
+
+# Tibetan carries no digits of its own, in script or in Wylie, so a token
+# containing one is a strong signal of leftover pagination.
+_DIGIT_TOKEN_RE = re.compile(r"\S*[0-9\u0f20-\u0f29]\S*")
+
+
+_TRAILING_PAREN_RE = re.compile(r"\s*\([^()]*\)\s*$")
+
+
+def format_page_ref(marker: str) -> str:
+    """Tidy a raw marker for display inside a note.
+
+    A trailing parenthetical such as "(pdf 55)" is dropped: it would nest
+    inside the note's own brackets, and the PDF page is derivable from the
+    folio anyway. Everything else is reproduced exactly as the witness wrote
+    it, so each version keeps its own citation style.
+    """
+    ref = _TRAILING_PAREN_RE.sub("", (marker or "").strip())
+    return ref.strip().strip(",").strip()
+
+
+def refs_at_offsets(markers, offset):
+    """The marker in force at ``offset`` — the last one at or before it."""
+    ref = ""
+    for pos, mk in markers:
+        if pos <= offset:
+            ref = mk
+        else:
+            break
+    return ref
+
+
 # ── Upload decoding ──────────────────────────────────────────────────
 # Uploads are not reliably UTF-8. OCR tools and PDF text extractors on macOS
 # still emit Mac OS Roman, in which 0xCA is a non-breaking space — an invalid
@@ -246,6 +349,21 @@ def shrink_footnote_style(document, font_size=8, line_spacing_multiple=0.85):
             pass
 
 
+# Word processors and OCR routinely convert the Wylie a-chung apostrophe into a
+# typographic quote. The characters look nearly identical but are distinct, so
+# 'gyur and ’gyur compare as different words and every one produces a false
+# variant — 9 of them in one witness of Jataka 35. Normalized for comparison
+# only, exactly as "|" and "/" are treated as one shad; the text itself is
+# never rewritten, so a witness still prints the character it actually uses.
+_APOSTROPHE_VARIANTS = ("\u2018", "\u2019", "\u201b", "\u02bc")
+_APOSTROPHE_RE = re.compile("[" + "".join(_APOSTROPHE_VARIANTS) + "]")
+
+
+def normalize_apostrophes(s: str) -> str:
+    """Fold typographic apostrophes onto the ASCII one used by Wylie."""
+    return _APOSTROPHE_RE.sub("'", s)
+
+
 def strip_ignorable(s: str, ignore_shad: bool = True) -> str:
     """Remove characters that don't count as content differences.
 
@@ -260,6 +378,7 @@ def strip_ignorable(s: str, ignore_shad: bool = True) -> str:
     content and produce an empty "om.] … om." note.
     """
     ignore_set = PUNCT_TO_IGNORE if ignore_shad else PUNCT_TO_IGNORE_BASE
+    s = normalize_apostrophes(s)
     if not ignore_shad and "|" in SHAD_CHARS:
         # "|" and "/" are the same shad in different notation; when shad is
         # kept for comparison they must not read as a difference.
@@ -360,7 +479,7 @@ TSHEG = "་"  # Tibetan intersyllabic tsheg, used to rejoin syllables
 # alignment boundary strands a bare a-chung as its own token, it should re-join
 # the adjacent syllable so an added/omitted a-chung reads as e.g. "su'" rather
 # than surfacing as a meaningless standalone "'".
-A_CHUNG_CHARS = set(["འ", "'"])
+A_CHUNG_CHARS = set(["འ", "'"]) | set(_APOSTROPHE_VARIANTS)
 
 # Syllable separators for display splitting: tsheg, no-break tsheg, whitespace.
 _SYLLABLE_SEP_RE = re.compile(r"[་༌\s]+")
@@ -376,7 +495,11 @@ def _syllables(seg: str, ignore_shad: bool):
     """
     if not seg:
         return []
-    s = seg
+    # Fold typographic apostrophes here too, so a note reports the Tibetan
+    # reading ('das) rather than the typographic accident (‘das). This only
+    # affects note text: the golden document emits the base's own characters
+    # directly and is never routed through here.
+    s = normalize_apostrophes(seg)
     if ignore_shad:
         for ch in SHAD_CHARS:
             s = s.replace(ch, "")
@@ -446,7 +569,7 @@ def _reading_display(sylls) -> str:
     return joiner.join(sylls)
 
 
-def build_note_text(segs, labels, positive=False, ignore_shad=True):
+def build_note_text(segs, labels, positive=False, ignore_shad=True, refs=None):
     """Build a single apparatus note in classic critical-edition style.
 
     ``segs`` and ``labels`` are base-first: index 0 is the base/golden witness
@@ -468,7 +591,16 @@ def build_note_text(segs, labels, positive=False, ignore_shad=True):
       are listed. A positive apparatus additionally credits the witnesses that
       agree by listing their sigla with the lemma (``V1, V3 la] V2 pa``)
       instead of repeating the reading.
+    - ``refs`` optionally supplies each witness's own page/folio reference,
+      rendered in parentheses after its siglum:
+      ``V1 (p.292) skyong] V2 (kha, 4r.7) skyod; V3 (ga,17v) skyos``. A
+      witness without a reference simply shows none.
     """
+    refs = refs or [""] * len(segs)
+
+    def siglum(i):
+        r = format_page_ref(refs[i]) if i < len(refs) else ""
+        return f"{labels[i]} ({r})" if r else labels[i]
     # comparison keys (punctuation/tsheg-insensitive) decide agreement
     keys = [strip_ignorable(s, ignore_shad) for s in segs]
     # display syllables, with syllables shared by every witness trimmed away
@@ -477,12 +609,12 @@ def build_note_text(segs, labels, positive=False, ignore_shad=True):
     lemma = _reading_display(trimmed[0])
     base_key = keys[0]
 
-    lemma_labels = [labels[0]]
+    lemma_labels = [siglum(0)]
     if positive:
-        lemma_labels += [labels[i] for i in range(1, len(segs)) if keys[i] == base_key]
+        lemma_labels += [siglum(i) for i in range(1, len(segs)) if keys[i] == base_key]
 
     selected = [
-        (labels[i], trimmed[i]) for i in range(1, len(segs)) if keys[i] != base_key
+        (siglum(i), trimmed[i]) for i in range(1, len(segs)) if keys[i] != base_key
     ]
     if not selected:
         return "", lemma
@@ -508,7 +640,7 @@ CollatedCell = namedtuple(
 )
 
 
-def collate_cells(aligned, labels, ignore_shad=True, positive=False):
+def collate_cells(aligned, labels, ignore_shad=True, positive=False, markers=None):
     """Walk the aligned rows once and decide everything about each cell.
 
     The report and the golden document used to run separate copies of this
@@ -519,15 +651,35 @@ def collate_cells(aligned, labels, ignore_shad=True, positive=False):
     failure mode — both exporters consume this list.
 
     ``aligned`` is base-first, one row per witness; "-" marks an aligner gap.
+    ``markers`` optionally gives each witness's page markers from
+    extract_page_markers(); each witness is tracked through its own text so a
+    note can cite the page that witness was on at that point.
     """
     n = len(aligned)
     width = max((len(r) for r in aligned), default=0)
     rows = [list(r) + [""] * (width - len(r)) for r in aligned]
 
+    markers = markers or [[] for _ in range(n)]
+    # per-witness running offset into its own (marker-stripped) text, and the
+    # index of the next marker not yet reached
+    offsets = [0] * n
+    m_idx = [0] * n
+    current = [""] * n
+
     cells = []
     for j in range(width):
         raw = [rows[i][j] for i in range(n)]
         segs = ["" if c == "-" else c for c in raw]
+
+        # advance each witness's page to whatever it is at this cell, then
+        # consume this cell's characters
+        for i in range(n):
+            mk = markers[i] if i < len(markers) else []
+            while m_idx[i] < len(mk) and mk[m_idx[i]][0] <= offsets[i]:
+                current[i] = mk[m_idx[i]][1]
+                m_idx[i] += 1
+            offsets[i] += len(segs[i])
+        cell_refs = list(current)
         norms = [strip_ignorable(s, ignore_shad) for s in segs]
         base_norm = norms[0]
 
@@ -553,7 +705,8 @@ def collate_cells(aligned, labels, ignore_shad=True, positive=False):
         note, lemma = "", ""
         if has_diff:
             note, lemma = build_note_text(
-                segs, labels, positive=positive, ignore_shad=ignore_shad
+                segs, labels, positive=positive, ignore_shad=ignore_shad,
+                refs=cell_refs,
             )
 
         cells.append(
@@ -801,6 +954,31 @@ with col_a:
         help="This is the primary version — all notes are anchored here.",
     )
     label1 = st.text_input("Label for base text", value="V1")
+    # Page markers are always removed from the collation when a file has
+    # them — left in, they align as readings and produce spurious variants.
+    # Whether they are also *cited* in the notes is a separate choice, so
+    # the example is asked for either way.
+    page_examples, page_show = [""], [False]
+    if st.checkbox("Are there any page markers?", value=False, key="pghas0"):
+        page_show[0] = st.checkbox(
+            "Include the page marker in the footnote?",
+            value=True,
+            key="pgshow0",
+            help="Cite this witness's own pagination in the notes, e.g. "
+            "`V1 (p.292) skyong]`. Each version keeps the format its own "
+            "source uses — nothing is converted. Untick to remove the "
+            "markers from the collation without citing them.",
+        )
+        page_examples[0] = st.text_input(
+            "First page marker, exactly as it appears",
+            value="",
+            key="pgx0",
+            placeholder="p.292",
+            help="Paste the first marker from this file — e.g. p.292 or "
+            "kha, 1r.1 (pdf 47). The pattern is worked out from it and the "
+            "rest are found automatically, including changes of case, "
+            "volume and recto/verso.",
+        )
 
 with col_b:
     n_comp = int(
@@ -835,6 +1013,29 @@ for _i in range(n_comp):
                 key=f"lab{_i + 1}",
             )
         )
+        _ex, _show = "", False
+        if st.checkbox(
+            "Are there any page markers?", value=False, key=f"pghas{_i + 1}"
+        ):
+            _show = st.checkbox(
+                "Include the page marker in the footnote?",
+                value=True,
+                key=f"pgshow{_i + 1}",
+                help="Cite this witness's own pagination in the notes. Each "
+                "version keeps the format its own source uses. Untick to "
+                "remove the markers without citing them.",
+            )
+            _ex = st.text_input(
+                "First page marker, exactly as it appears",
+                value="",
+                key=f"pgx{_i + 1}",
+                placeholder="Pdf.50",
+                help="Paste the first marker from this file. The pattern is "
+                "worked out from it and the rest are found automatically, "
+                "including changes of case, volume and recto/verso.",
+            )
+        page_examples.append(_ex)
+        page_show.append(_show)
 
 st.divider()
 st.subheader("3 · Options")
@@ -950,6 +1151,43 @@ if run_btn and ready:
         for _i in range(1, len(texts)):
             texts[_i] = strip_folio_tags(texts[_i])
 
+    # Page markers come out of every witness before alignment — left in, they
+    # collate as readings. Their positions are kept so a note can cite the
+    # page each witness was on.
+    page_markers = []
+    for _i, _t in enumerate(texts):
+        _ex = page_examples[_i] if _i < len(page_examples) else ""
+        texts[_i], _mk = extract_page_markers(_t, _ex)
+        page_markers.append(_mk)
+        if _ex.strip() and not _mk:
+            st.warning(
+                f"**{names[_i]}** — no page markers matched the example "
+                f"`{_ex.strip()}`. That file will contribute no page "
+                "references; check the example matches the file."
+            )
+
+    # A witness left unchecked keeps whatever is in its text, and anything
+    # left there is collated as a reading. Tibetan — in script or in Wylie —
+    # carries no digits of its own, so a digit surviving folio-tag stripping
+    # is almost certainly pagination that is about to be read as a variant.
+    # Cheap to detect and worth saying loudly, because the result is a note
+    # like "V1 om.] V2 4r7 (pdf 55)" rather than an error.
+    for _i, _t in enumerate(texts):
+        _ex = page_examples[_i] if _i < len(page_examples) else ""
+        if _ex.strip():
+            continue
+        _hits = _DIGIT_TOKEN_RE.findall(_t)
+        if _hits:
+            _eg = ", ".join(f"`{h}`" for h in dict.fromkeys(_hits[:3]))
+            st.warning(
+                f"**{names[_i]}** — “Are there any page markers?” is off "
+                f"for this file, but its text still contains numbers "
+                f"({_eg}). Tibetan text has no digits of its own, so these "
+                "are probably page markers — and they will be collated as "
+                "readings, producing spurious variants. Tick that box for "
+                "this file and give an example so they are removed."
+            )
+
     with st.expander("Preprocessing preview", expanded=False):
         st.caption(
             "Occurrences of each preprocessing pattern found per file "
@@ -958,13 +1196,27 @@ if run_btn and ready:
         for fname, counts in prep_preview.items():
             hits = ", ".join(f"{k}: {v}" for k, v in counts.items() if v) or "nothing to clean"
             st.markdown(f"- **{fname}** — {hits}")
+        if any(page_markers):
+            st.caption("Page markers found (first and last shown):")
+            for _nm, _mk in zip(names, page_markers):
+                if _mk:
+                    st.markdown(
+                        f"- **{_nm}** — {len(_mk)} markers, "
+                        f"`{_mk[0][1]}` … `{_mk[-1][1]}`"
+                    )
+                else:
+                    st.markdown(f"- **{_nm}** — none")
 
     with st.spinner("Aligning texts… this may take a minute for long texts."):
         aligned = align_witnesses(texts)
 
     with st.spinner("Building collation report…"):
         cells = collate_cells(
-            aligned, labels, ignore_shad=ignore_shad, positive=positive
+            aligned, labels, ignore_shad=ignore_shad, positive=positive,
+            markers=[
+                _mk if (_i < len(page_show) and page_show[_i]) else []
+                for _i, _mk in enumerate(page_markers)
+            ],
         )
         report_buf, notes = export_collation_report(cells, labels, names)
 
