@@ -808,7 +808,13 @@ st.set_page_config(
     layout="centered",
 )
 
-st.title("📜 Tibetan Collation Tool")
+# Streamlit markdown has no underline directive (bold/italics/strikethrough
+# and colour only) and st.title() takes no unsafe_allow_html, so the title is
+# rendered as an explicit <h1>. Only the wording is underlined, not the emoji.
+st.markdown(
+    "<h1>📜 <u>Tibetan Collation Tool</u></h1>",
+    unsafe_allow_html=True,
+)
 st.caption("Upload your texts, run the collation, and download the Word outputs.")
 
 st.divider()
