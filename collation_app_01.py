@@ -959,9 +959,17 @@ with col_a:
     # Whether they are also *cited* in the notes is a separate choice, so
     # the example is asked for either way.
     page_examples, page_show = [""], [False]
-    if st.checkbox("Are there any page markers?", value=False, key="pghas0"):
+    if st.checkbox(
+        "This text has page markers",
+        value=False,
+        key="pghas0",
+        help="Tick this if the file contains page or folio references such "
+        "as Pdf.50, p.292 or kha, 4r.7 (pdf 55). They are removed before "
+        "collation either way — left in, they align as readings and produce "
+        "spurious variants.",
+    ):
         page_show[0] = st.checkbox(
-            "Include the page marker in the footnote?",
+            "Cite them in the notes",
             value=True,
             key="pgshow0",
             help="Cite this witness's own pagination in the notes, e.g. "
@@ -1015,10 +1023,15 @@ for _i in range(n_comp):
         )
         _ex, _show = "", False
         if st.checkbox(
-            "Are there any page markers?", value=False, key=f"pghas{_i + 1}"
+            "This text has page markers",
+            value=False,
+            key=f"pghas{_i + 1}",
+            help="Tick this if the file contains page or folio references "
+            "such as Pdf.50, p.292 or kha, 4r.7 (pdf 55). They are removed "
+            "before collation either way.",
         ):
             _show = st.checkbox(
-                "Include the page marker in the footnote?",
+                "Cite them in the notes",
                 value=True,
                 key=f"pgshow{_i + 1}",
                 help="Cite this witness's own pagination in the notes. Each "
@@ -1180,8 +1193,8 @@ if run_btn and ready:
         if _hits:
             _eg = ", ".join(f"`{h}`" for h in dict.fromkeys(_hits[:3]))
             st.warning(
-                f"**{names[_i]}** — “Are there any page markers?” is off "
-                f"for this file, but its text still contains numbers "
+                f"**{names[_i]}** — “This text has page markers” is not "
+                f"ticked for this file, but its text still contains numbers "
                 f"({_eg}). Tibetan text has no digits of its own, so these "
                 "are probably page markers — and they will be collated as "
                 "readings, producing spurious variants. Tick that box for "

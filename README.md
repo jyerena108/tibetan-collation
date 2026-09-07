@@ -55,11 +55,11 @@ check the output. Windows and classic-Mac line endings are normalized.
 
 **Page / folio markers**
 
-Each upload has its own **Are there any page markers?** question. Tick it and
-you are asked two things:
+Each upload has its own **This text has page markers** tick box. Tick it and
+two more controls appear:
 
-- *Include the page marker in the footnote?* — whether that witness's page is
-  cited in the notes.
+- *Cite them in the notes* — whether that witness's page is shown in the
+  notes.
 - *First page marker, exactly as it appears* — paste the first one from that
   file, e.g. `Pdf.50`, `p.292`, or `kha, 1r.1 (pdf 47)`.
 
@@ -77,7 +77,7 @@ own source uses; nothing is converted:
 V1 (Pdf.50) lnga] V2 (P.272) lha; V3 (Pdf.292), V4 (Pdf.320) lta
 ```
 
-If a file has page markers but the question is left unticked, the tool warns —
+If a file has page markers but the box is left unticked, the tool warns —
 Tibetan carries no digits of its own, so numbers surviving in the text are a
 reliable sign of pagination about to be read as a variant.
 
