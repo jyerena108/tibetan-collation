@@ -501,8 +501,15 @@ def _syllables(seg: str, ignore_shad: bool):
     # directly and is never routed through here.
     s = normalize_apostrophes(seg)
     if ignore_shad:
+        # Replace the shad with a space rather than deleting it. The shad is
+        # itself a word separator, so "ba//mtshan" has no other break between
+        # the two words; deleting it rendered them fused as "bamtshan" while
+        # a witness writing "ba'i mtshon" rendered correctly. The comparison
+        # keys were always right (whitespace is ignored there), so this was a
+        # display fault only — and it also split groups, since witnesses are
+        # grouped by their displayed reading.
         for ch in SHAD_CHARS:
-            s = s.replace(ch, "")
+            s = s.replace(ch, " ")
     # Drop ignorable non-content characters (head marks, western punctuation)
     # from the display so readings never show e.g. "@#" from a source file.
     parts = []
