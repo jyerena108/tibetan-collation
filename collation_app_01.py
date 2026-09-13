@@ -743,6 +743,12 @@ def _base_index_for_mark(base_seg: str, witness_seg: str, within: int) -> int:
     return i
 
 
+# One witness's page marker, located twice: where it belongs in that
+# witness's own column of the report, and where it belongs in the base's
+# reading text in the golden document.
+PageMark = namedtuple("PageMark", "witness own_at base_at text")
+
+
 CollatedCell = namedtuple(
     "CollatedCell", "segs norms diffs base_missing has_diff note lemma page_marks"
 )
@@ -789,13 +795,21 @@ def collate_cells(aligned, labels, ignore_shad=True, positive=False, markers=Non
             end = offsets[i] + len(segs[i])
             while m_idx[i] < len(mk) and mk[m_idx[i]][0] < max(end, offsets[i] + 1):
                 pos, text = mk[m_idx[i]]
+                within = max(0, pos - offsets[i])
+                # own_at places it in this witness's own column in the report;
+                # base_at places it in the base's reading text in the golden
+                # document, where every witness's markers are woven together
                 page_marks.append(
-                    (_base_index_for_mark(segs[0], segs[i], max(0, pos - offsets[i])),
-                     text)
+                    PageMark(
+                        witness=i,
+                        own_at=_base_index_for_mark(segs[i], segs[i], within),
+                        base_at=_base_index_for_mark(segs[0], segs[i], within),
+                        text=text,
+                    )
                 )
                 m_idx[i] += 1
             offsets[i] = end
-        page_marks.sort(key=lambda pm: pm[0])
+        page_marks.sort(key=lambda pm: pm.base_at)
         norms = [strip_ignorable(s, ignore_shad) for s in segs]
         base_norm = norms[0]
 
@@ -832,15 +846,45 @@ def collate_cells(aligned, labels, ignore_shad=True, positive=False, markers=Non
     # Markers past the last cell (a page turning at the very end) still belong
     # in the output, so they ride on the final cell.
     trailing = []
-    for i in range(n):
-        mk = markers[i] if i < len(markers) else []
-        trailing.extend((len(cells[-1].segs[0]) if cells else 0, m[1])
-                        for m in mk[m_idx[i]:])
+    if cells:
+        for i in range(n):
+            mk = markers[i] if i < len(markers) else []
+            trailing.extend(
+                PageMark(witness=i,
+                         own_at=len(cells[-1].segs[i]),
+                         base_at=len(cells[-1].segs[0]),
+                         text=m[1])
+                for m in mk[m_idx[i]:]
+            )
     if trailing and cells:
         cells[-1] = cells[-1]._replace(
-            page_marks=sorted(cells[-1].page_marks + trailing, key=lambda pm: pm[0])
+            page_marks=sorted(cells[-1].page_marks + trailing,
+                              key=lambda pm: pm.base_at)
         )
     return cells
+
+
+def _write_cell(para, text, marks, shade):
+    """Write one witness's cell into its column, splicing in its own markers.
+
+    A witness's pagination belongs in that witness's column, at the point in
+    its own text where the page turns — unlike the golden document, where
+    every witness's markers are woven into the one reading text.
+    """
+    pos = 0
+    for pm in sorted(marks, key=lambda m: m.own_at):
+        at = max(pos, min(pm.own_at, len(text)))
+        if at > pos:
+            run = para.add_run(text[pos:at])
+            if shade:
+                set_run_background_color(run, shade)
+            pos = at
+        mark_run = para.add_run(pm.text)
+        mark_run.italic = True
+    if pos < len(text):
+        run = para.add_run(text[pos:])
+        if shade:
+            set_run_background_color(run, shade)
 
 
 def export_collation_report(cells, labels, names):
@@ -886,27 +930,20 @@ def export_collation_report(cells, labels, names):
         color = current_note_color if note_active else None
         note_number = len(notes)
 
-        seg = cell.segs[0]
-        if seg:
-            run = paras[0].add_run(seg)
-            if color and any(cell.diffs) and cell.norms[0] != "":
-                set_run_background_color(run, color)
-            if note_start_here:
-                m = paras[0].add_run(f"[{note_number}]")
-                m.font.superscript = True
-        elif note_start_here:
-            m = paras[0].add_run(f"[{note_number}]")
-            m.font.superscript = True
-
-        for i in range(1, n):
+        for i in range(n):
             seg_i = cell.segs[i]
-            if not seg_i:
+            marks_i = [pm for pm in cell.page_marks if pm.witness == i]
+            if i == 0:
+                differs = any(cell.diffs)
+                show_note = note_start_here
+            else:
+                differs = cell.diffs[i - 1] or cell.base_missing
+                show_note = note_start_here and differs
+            if not seg_i and not marks_i and not show_note:
                 continue
-            differs = cell.diffs[i - 1] or cell.base_missing
-            run = paras[i].add_run(seg_i)
-            if color and differs and cell.norms[i] != "":
-                set_run_background_color(run, color)
-            if note_start_here and differs:
+            shade = color if (color and differs and cell.norms[i] != "") else None
+            _write_cell(paras[i], seg_i, marks_i, shade)
+            if show_note:
                 m = paras[i].add_run(f"[{note_number}]")
                 m.font.superscript = True
 
@@ -1002,7 +1039,7 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base", milestones=
 
         # Everything that has to be spliced into this cell's base text, by
         # position: each witness's page markers, and the footnote reference.
-        inserts = [(at, 0, mark) for at, mark in cell.page_marks]
+        inserts = [(pm.base_at, 0, pm.text) for pm in cell.page_marks]
 
         if place_note and seg:
             # Put the reference mark right after the annotated word, before any
