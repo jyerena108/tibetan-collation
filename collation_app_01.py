@@ -624,6 +624,34 @@ def build_note_text(segs, labels, positive=False, ignore_shad=True):
 
 
 # One record per aligned cell, shared by both exporters.
+def _base_index_for_mark(base_seg: str, witness_seg: str, within: int) -> int:
+    """Where in the base's cell does a marker inside a witness's cell belong?
+
+    A page marker usually falls exactly on a cell boundary, but when witnesses
+    disagree around it the aligner produces one wide cell containing it — e.g.
+    BX1 breaking a word as "me\ntog" against AB1's "me tog" puts AB1's page
+    marker in the middle of the shared cell. Anchoring to the cell's start or
+    end then lands the marker inside a word.
+
+    The marker is placed after the same number of whitespace-separated words,
+    then advanced over any whitespace so it sits on the following word rather
+    than in the gap before it. Counting words rather than characters matters
+    where the witnesses genuinely differ: DX1 reading "ni" against the base's
+    "nyid" would put a character count in the middle of the base's word.
+    """
+    k = len(witness_seg[:within].split())
+    i = seen = 0
+    while i < len(base_seg) and seen < k:
+        while i < len(base_seg) and base_seg[i].isspace():
+            i += 1
+        while i < len(base_seg) and not base_seg[i].isspace():
+            i += 1
+        seen += 1
+    while i < len(base_seg) and base_seg[i].isspace():
+        i += 1
+    return i
+
+
 CollatedCell = namedtuple(
     "CollatedCell", "segs norms diffs base_missing has_diff note lemma page_marks"
 )
@@ -661,15 +689,22 @@ def collate_cells(aligned, labels, ignore_shad=True, positive=False, markers=Non
         raw = [rows[i][j] for i in range(n)]
         segs = ["" if c == "-" else c for c in raw]
 
-        # Collect any witness that starts a new page at this cell, then
-        # consume this cell's characters from each witness's own offset.
+        # A marker belongs to the cell that contains its offset, not the next
+        # cell to start at or after it — testing against the cell's start
+        # pushed any marker falling mid-cell onto the following word.
         page_marks = []
         for i in range(n):
             mk = markers[i] if i < len(markers) else []
-            while m_idx[i] < len(mk) and mk[m_idx[i]][0] <= offsets[i]:
-                page_marks.append(mk[m_idx[i]][1])
+            end = offsets[i] + len(segs[i])
+            while m_idx[i] < len(mk) and mk[m_idx[i]][0] < max(end, offsets[i] + 1):
+                pos, text = mk[m_idx[i]]
+                page_marks.append(
+                    (_base_index_for_mark(segs[0], segs[i], max(0, pos - offsets[i])),
+                     text)
+                )
                 m_idx[i] += 1
-            offsets[i] += len(segs[i])
+            offsets[i] = end
+        page_marks.sort(key=lambda pm: pm[0])
         norms = [strip_ignorable(s, ignore_shad) for s in segs]
         base_norm = norms[0]
 
@@ -708,9 +743,12 @@ def collate_cells(aligned, labels, ignore_shad=True, positive=False, markers=Non
     trailing = []
     for i in range(n):
         mk = markers[i] if i < len(markers) else []
-        trailing.extend(m[1] for m in mk[m_idx[i]:])
+        trailing.extend((len(cells[-1].segs[0]) if cells else 0, m[1])
+                        for m in mk[m_idx[i]:])
     if trailing and cells:
-        cells[-1] = cells[-1]._replace(page_marks=cells[-1].page_marks + trailing)
+        cells[-1] = cells[-1]._replace(
+            page_marks=sorted(cells[-1].page_marks + trailing, key=lambda pm: pm[0])
+        )
     return cells
 
 
@@ -865,14 +903,15 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base", milestones=
 
     note_index = 0
     for cell in cells:
-        for mark in cell.page_marks:
-            mark_run = p_text.add_run(mark)
-            mark_run.italic = True
         seg = cell.segs[0]
         note_start_here = bool(cell.note)
         if note_start_here:
             note_index += 1
         place_note = note_start_here and 1 <= note_index <= len(notes)
+
+        # Everything that has to be spliced into this cell's base text, by
+        # position: each witness's page markers, and the footnote reference.
+        inserts = [(at, 0, mark) for at, mark in cell.page_marks]
 
         if place_note and seg:
             # Put the reference mark right after the annotated word, before any
@@ -893,18 +932,26 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base", milestones=
                     cut -= 1
             if cut == 0:  # nothing to anchor to — keep the original placement
                 cut = len(seg.rstrip())
-            content = seg[:cut]
-            trailing = seg[cut:]
-            if content:
-                emit(p_text, content)
-            p_text.add_footnote(notes[note_index - 1])
-            if trailing:
-                emit(p_text, trailing)
-        else:
-            if seg:
-                emit(p_text, seg)
-            if place_note:
+            inserts.append((cut, 1, None))
+        elif place_note:
+            inserts.append((0, 1, None))
+
+        # A page marker at the same spot as a footnote goes first, so the
+        # marker opens the page and the note stays attached to its word.
+        inserts.sort(key=lambda x: (x[0], x[1]))
+        pos = 0
+        for at, kind, payload in inserts:
+            at = max(pos, min(at, len(seg)))
+            if at > pos:
+                emit(p_text, seg[pos:at])
+                pos = at
+            if kind == 0:
+                mark_run = p_text.add_run(payload)
+                mark_run.italic = True
+            else:
                 p_text.add_footnote(notes[note_index - 1])
+        if pos < len(seg):
+            emit(p_text, seg[pos:])
 
     # Any milestone past the last emitted character (e.g. a tag at the very
     # end of the base text) still needs to be written out.
