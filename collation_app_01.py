@@ -12,6 +12,9 @@ Run with:
 import io
 import re
 import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections import namedtuple
 from pathlib import Path
 
@@ -105,6 +108,94 @@ def count_preprocessing_hits(text: str) -> dict:
         "pipes |": text.count("|"),
         "head marks @ # !": sum(text.count(c) for c in "@#!"),
     }
+
+
+# ── Google Docs ──────────────────────────────────────────────────────
+# A Google Doc can be read without any API key through its plain-text export
+# endpoint, but only when the document is shared "anyone with the link can
+# view": Streamlit Cloud fetches from its own servers, so a restricted doc
+# returns a sign-in page rather than the text. A document may hold several
+# tabs, and ?tab= selects one — without it every tab is concatenated, each
+# preceded by its title.
+_GDOC_ID_RE = re.compile(r"/document/d/([A-Za-z0-9_-]+)")
+_GDOC_TAB_RE = re.compile(r"[?&]tab=([A-Za-z0-9_.\-]+)")
+
+# Google's text export puts footnote bodies at the end, after a rule of
+# underscores. Left in, they collate as a trailing addition — one editorial
+# note like "?=spungs" is enough to invent a variant. A run of underscores
+# does not occur in Tibetan, in script or in Wylie, so the rule is safe.
+_GDOC_FOOTNOTES_RE = re.compile(r"\n_{8,}\s*\n")
+
+
+def strip_gdoc_footnotes(text: str) -> str:
+    """Drop the footnote block Google appends after a rule of underscores."""
+    m = _GDOC_FOOTNOTES_RE.search(text)
+    return text[: m.start()] if m else text
+
+
+def fetch_google_doc(url: str, timeout: int = 30):
+    """Fetch a Google Doc (or one of its tabs) as plain text.
+
+    Returns ``(raw_bytes, display_name)``. Raises ValueError with a message
+    meant for the user — a wrong link and a private document are the two
+    things that actually go wrong, and they need different fixes.
+    """
+    url = (url or "").strip()
+    if not url:
+        raise ValueError("no link given.")
+    m = _GDOC_ID_RE.search(url)
+    if not m:
+        raise ValueError(
+            "that does not look like a Google Doc link — it should contain "
+            "`/document/d/…`. Copy the URL from the browser's address bar."
+        )
+    doc_id = m.group(1)
+    tab = _GDOC_TAB_RE.search(url)
+    export = f"https://docs.google.com/document/d/{doc_id}/export?format=txt"
+    if tab:
+        export += f"&tab={tab.group(1)}"
+
+    req = urllib.request.Request(export, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            ctype = resp.headers.get("Content-Type", "")
+            disposition = resp.headers.get("Content-Disposition", "")
+            raw = resp.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise ValueError(
+                "Google refused the request. Set the document's sharing to "
+                "“Anyone with the link → Viewer”; the app fetches it from a "
+                "server, so it cannot use your Google account."
+            )
+        if exc.code == 404:
+            raise ValueError("no document found at that link.")
+        raise ValueError(f"Google returned HTTP {exc.code}.")
+    except Exception as exc:  # network trouble, DNS, timeout
+        raise ValueError(f"could not reach Google Docs ({exc}).")
+
+    if "text/plain" not in ctype:
+        raise ValueError(
+            "Google returned a sign-in page instead of the text. Set the "
+            "document's sharing to “Anyone with the link → Viewer”."
+        )
+
+    name = doc_id
+    got = re.search(r"filename\*=UTF-8''([^;]+)", disposition)
+    if got:
+        name = urllib.parse.unquote(got.group(1))
+    else:
+        got = re.search(r'filename="([^"]+)"', disposition)
+        if got:
+            name = got.group(1)
+    if name.lower().endswith(".txt"):
+        name = name[:-4]
+    name = re.sub(r"\s+", " ", name).strip()
+    if tab:
+        # every tab of one document reports the same title, so the tab id is
+        # what tells two witnesses apart in the report header
+        name = f"{name} · {tab.group(1)}"
+    return raw, name
 
 
 # ── Page / folio markers ─────────────────────────────────────────────
@@ -1000,13 +1091,34 @@ st.divider()
 # ── File uploads
 st.subheader("1 · Upload texts")
 
+source_mode = st.radio(
+    "Source",
+    options=["Upload .txt files", "Google Doc links"],
+    index=0,
+    horizontal=True,
+    help="A Google Doc must be shared “Anyone with the link → Viewer”: the "
+    "app fetches it from a server and cannot use your Google account. Paste "
+    "the URL straight from the address bar — if the document has tabs, the "
+    "?tab=… part selects the one you are looking at.",
+)
+use_links = source_mode.startswith("Google")
+
 col_a, col_b = st.columns([1, 1])
 with col_a:
-    base_file = st.file_uploader(
-        "Base / golden text (.txt)",
-        type=["txt"],
-        help="This is the primary version — all notes are anchored here.",
-    )
+    base_link = ""
+    base_file = None
+    if use_links:
+        base_link = st.text_input(
+            "Base / golden text — Google Doc link",
+            key="lnk0",
+            placeholder="https://docs.google.com/document/d/…/edit?tab=t.…",
+        )
+    else:
+        base_file = st.file_uploader(
+            "Base / golden text (.txt)",
+            type=["txt"],
+            help="This is the primary version — all notes are anchored here.",
+        )
     label1 = st.text_input("Label for base text", value="V1")
     # A file's page markers are taken out before collation — left in, they
     # align as readings — and woven back into the golden document at the
@@ -1049,15 +1161,27 @@ st.subheader("2 · Comparison text(s)")
 
 # Laid out three to a row so five uploaders stay readable.
 comp_files = []
+comp_links = []
 comp_labels = []
 _cols = st.columns(min(n_comp, 3))
 for _i in range(n_comp):
     with _cols[_i % len(_cols)]:
-        comp_files.append(
-            st.file_uploader(
-                f"Comparison text {_i + 1} (.txt)", type=["txt"], key=f"c{_i + 1}"
+        if use_links:
+            comp_files.append(None)
+            comp_links.append(
+                st.text_input(
+                    f"Comparison text {_i + 1} — Google Doc link",
+                    key=f"lnk{_i + 1}",
+                    placeholder="https://docs.google.com/document/d/…/edit?tab=t.…",
+                )
             )
-        )
+        else:
+            comp_links.append("")
+            comp_files.append(
+                st.file_uploader(
+                    f"Comparison text {_i + 1} (.txt)", type=["txt"], key=f"c{_i + 1}"
+                )
+            )
         comp_labels.append(
             st.text_input(
                 f"Label for comparison {_i + 1}",
@@ -1151,26 +1275,56 @@ positive = apparatus_mode.startswith("Positive")
 
 st.subheader("4 · Run")
 
-ready = base_file is not None and all(f is not None for f in comp_files)
+if use_links:
+    ready = bool(base_link.strip()) and all(l.strip() for l in comp_links)
+else:
+    ready = base_file is not None and all(f is not None for f in comp_files)
 
 if not ready:
-    st.info("Upload all required files above to enable the collation.")
+    st.info(
+        "Paste a link for every text above to enable the collation."
+        if use_links else
+        "Upload all required files above to enable the collation."
+    )
 
 run_btn = st.button("▶ Run Collation", disabled=not ready, type="primary")
 
 if run_btn and ready:
     uploads = [base_file] + comp_files
+    links = [base_link] + comp_links
     labels = [label1] + comp_labels
-    names = [f.name for f in uploads]
 
     # .getvalue() (not .read()) — Streamlit keeps the uploaded file's read
     # cursor across reruns, so a second Run would read empty bytes and
-    # silently reuse the previous results.
-    texts, encodings = [], []
-    for f in uploads:
-        _t, _e = decode_upload(f.getvalue())
+    # silently reuse the previous results. Google Docs are fetched here, in
+    # the Run branch, so editing a widget does not re-download anything.
+    texts, encodings, names = [], [], []
+    _fetched = []
+    for _i in range(len(labels)):
+        if use_links:
+            with st.spinner(f"Fetching {labels[_i]} from Google Docs…"):
+                try:
+                    _raw, _name = fetch_google_doc(links[_i])
+                except ValueError as _exc:
+                    st.error(f"**{labels[_i]}** — {_exc}")
+                    st.stop()
+            _t, _e = decode_upload(_raw)
+            # Google appends footnote bodies after a rule of underscores;
+            # left in they collate as a trailing addition.
+            _t = strip_gdoc_footnotes(_t)
+            _fetched.append((labels[_i], _name, len(_t)))
+        else:
+            _raw = uploads[_i].getvalue()
+            _name = uploads[_i].name
+            _t, _e = decode_upload(_raw)
+        names.append(_name)
         texts.append(_t)
         encodings.append(_e)
+
+    if _fetched:
+        st.success("Fetched from Google Docs:")
+        for _lb, _nm, _n in _fetched:
+            st.markdown(f"- **{_lb}** — {_nm} · {_n:,} characters")
 
     # A non-UTF-8 file is read on a best guess, so say so: a wrong guess
     # surfaces as odd characters in the notes rather than as an error.
