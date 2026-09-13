@@ -151,20 +151,31 @@ def pattern_from_example(example: str) -> str:
     return pat
 
 
+# House style is a bracketed tag containing a dot: [BX1.1v.1], [DX1.145r.1],
+# or the shorter [AB1.272]. Requiring the dot is what separates a page marker
+# from a plain folio tag like [354], which the folio-tag option handles.
+DEFAULT_PAGE_MARKER_RE = r"\[[^\[\]\n]*\.[^\[\]\n]*\]"
+
+
 def extract_page_markers(text: str, example: str):
     """Strip page markers from ``text``, remembering what and where.
 
     Returns ``(stripped_text, markers)`` with markers as ``(offset, marker)``
     pairs, the offset being the position in the *stripped* text from which that
     marker's page applies. Markers must be removed before collation or they
-    align as readings and pollute the apparatus; their positions are what let a
-    note cite each witness's own pagination.
+    align as readings and pollute the apparatus; their positions are what let
+    the golden document show where each witness turned its page.
+
+    With no ``example`` the default pattern is used: any bracketed tag
+    containing a dot. That covers the agreed house style — ``[BX1.1v.1]``
+    (siglum, folio, side, line) and the shorter ``[AB1.272]`` — while leaving
+    a plain folio tag such as ``[354]`` or ``[zhe 1]`` to the folio-tag
+    preprocessing option, which is a different thing.
     """
     example = (example or "").strip()
-    if not example:
-        return text, []
     try:
-        rx = re.compile(pattern_from_example(example))
+        rx = re.compile(pattern_from_example(example) if example
+                        else DEFAULT_PAGE_MARKER_RE)
     except re.error:
         return text, []
     markers, out, pos, last = [], [], 0, 0
@@ -182,32 +193,6 @@ def extract_page_markers(text: str, example: str):
 # Tibetan carries no digits of its own, in script or in Wylie, so a token
 # containing one is a strong signal of leftover pagination.
 _DIGIT_TOKEN_RE = re.compile(r"\S*[0-9\u0f20-\u0f29]\S*")
-
-
-_TRAILING_PAREN_RE = re.compile(r"\s*\([^()]*\)\s*$")
-
-
-def format_page_ref(marker: str) -> str:
-    """Tidy a raw marker for display inside a note.
-
-    A trailing parenthetical such as "(pdf 55)" is dropped: it would nest
-    inside the note's own brackets, and the PDF page is derivable from the
-    folio anyway. Everything else is reproduced exactly as the witness wrote
-    it, so each version keeps its own citation style.
-    """
-    ref = _TRAILING_PAREN_RE.sub("", (marker or "").strip())
-    return ref.strip().strip(",").strip()
-
-
-def refs_at_offsets(markers, offset):
-    """The marker in force at ``offset`` — the last one at or before it."""
-    ref = ""
-    for pos, mk in markers:
-        if pos <= offset:
-            ref = mk
-        else:
-            break
-    return ref
 
 
 # ── Upload decoding ──────────────────────────────────────────────────
@@ -576,7 +561,7 @@ def _reading_display(sylls) -> str:
     return joiner.join(sylls)
 
 
-def build_note_text(segs, labels, positive=False, ignore_shad=True, refs=None):
+def build_note_text(segs, labels, positive=False, ignore_shad=True):
     """Build a single apparatus note in classic critical-edition style.
 
     ``segs`` and ``labels`` are base-first: index 0 is the base/golden witness
@@ -598,16 +583,13 @@ def build_note_text(segs, labels, positive=False, ignore_shad=True, refs=None):
       are listed. A positive apparatus additionally credits the witnesses that
       agree by listing their sigla with the lemma (``V1, V3 la] V2 pa``)
       instead of repeating the reading.
-    - ``refs`` optionally supplies each witness's own page/folio reference,
-      rendered in parentheses after its siglum:
-      ``V1 (p.292) skyong] V2 (kha, 4r.7) skyod; V3 (ga,17v) skyos``. A
-      witness without a reference simply shows none.
+    Pagination is not shown here. Each witness's page markers are embedded in
+    the golden document's running text instead, at the point where that
+    witness turns its page, which keeps the notes readable.
     """
-    refs = refs or [""] * len(segs)
 
     def siglum(i):
-        r = format_page_ref(refs[i]) if i < len(refs) else ""
-        return f"{labels[i]} ({r})" if r else labels[i]
+        return labels[i]
     # comparison keys (punctuation/tsheg-insensitive) decide agreement
     keys = [strip_ignorable(s, ignore_shad) for s in segs]
     # display syllables, with syllables shared by every witness trimmed away
@@ -643,7 +625,7 @@ def build_note_text(segs, labels, positive=False, ignore_shad=True, refs=None):
 
 # One record per aligned cell, shared by both exporters.
 CollatedCell = namedtuple(
-    "CollatedCell", "segs norms diffs base_missing has_diff note lemma"
+    "CollatedCell", "segs norms diffs base_missing has_diff note lemma page_marks"
 )
 
 
@@ -659,8 +641,10 @@ def collate_cells(aligned, labels, ignore_shad=True, positive=False, markers=Non
 
     ``aligned`` is base-first, one row per witness; "-" marks an aligner gap.
     ``markers`` optionally gives each witness's page markers from
-    extract_page_markers(); each witness is tracked through its own text so a
-    note can cite the page that witness was on at that point.
+    extract_page_markers(). Each witness is tracked through its own text, so
+    every cell records — in ``page_marks`` — the markers of any witnesses that
+    begin a new page there. The golden document emits those inline, which is
+    how one reading text can show where all the witnesses turned their pages.
     """
     n = len(aligned)
     width = max((len(r) for r in aligned), default=0)
@@ -671,22 +655,21 @@ def collate_cells(aligned, labels, ignore_shad=True, positive=False, markers=Non
     # index of the next marker not yet reached
     offsets = [0] * n
     m_idx = [0] * n
-    current = [""] * n
 
     cells = []
     for j in range(width):
         raw = [rows[i][j] for i in range(n)]
         segs = ["" if c == "-" else c for c in raw]
 
-        # advance each witness's page to whatever it is at this cell, then
-        # consume this cell's characters
+        # Collect any witness that starts a new page at this cell, then
+        # consume this cell's characters from each witness's own offset.
+        page_marks = []
         for i in range(n):
             mk = markers[i] if i < len(markers) else []
             while m_idx[i] < len(mk) and mk[m_idx[i]][0] <= offsets[i]:
-                current[i] = mk[m_idx[i]][1]
+                page_marks.append(mk[m_idx[i]][1])
                 m_idx[i] += 1
             offsets[i] += len(segs[i])
-        cell_refs = list(current)
         norms = [strip_ignorable(s, ignore_shad) for s in segs]
         base_norm = norms[0]
 
@@ -712,13 +695,22 @@ def collate_cells(aligned, labels, ignore_shad=True, positive=False, markers=Non
         note, lemma = "", ""
         if has_diff:
             note, lemma = build_note_text(
-                segs, labels, positive=positive, ignore_shad=ignore_shad,
-                refs=cell_refs,
+                segs, labels, positive=positive, ignore_shad=ignore_shad
             )
 
         cells.append(
-            CollatedCell(segs, norms, diffs, base_missing, has_diff, note, lemma)
+            CollatedCell(segs, norms, diffs, base_missing, has_diff, note,
+                         lemma, page_marks)
         )
+
+    # Markers past the last cell (a page turning at the very end) still belong
+    # in the output, so they ride on the final cell.
+    trailing = []
+    for i in range(n):
+        mk = markers[i] if i < len(markers) else []
+        trailing.extend(m[1] for m in mk[m_idx[i]:])
+    if trailing and cells:
+        cells[-1] = cells[-1]._replace(page_marks=cells[-1].page_marks + trailing)
     return cells
 
 
@@ -829,6 +821,11 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base", milestones=
     matches the report's notes by construction rather than by keeping a second
     copy of the diff logic in step with the first.
 
+    Every witness's page markers are woven back into the running text at the
+    cell where that witness turns its page, in italics, so one reading text
+    shows where all the witnesses stood. The base's own markers are included;
+    removing them all again gives back the base exactly.
+
     ``milestones`` is an optional list of ``(offset, tag)`` pairs from
     extract_folio_tags(): folio/page tags stripped before collation that are
     re-inserted here — as italic runs at their original character positions —
@@ -868,6 +865,9 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base", milestones=
 
     note_index = 0
     for cell in cells:
+        for mark in cell.page_marks:
+            mark_run = p_text.add_run(mark)
+            mark_run.italic = True
         seg = cell.segs[0]
         note_start_here = bool(cell.note)
         if note_start_here:
@@ -961,29 +961,19 @@ with col_a:
         help="This is the primary version — all notes are anchored here.",
     )
     label1 = st.text_input("Label for base text", value="V1")
-    # Page markers are always removed from the collation when a file has
-    # them — left in, they align as readings and produce spurious variants.
-    # Whether they are also *cited* in the notes is a separate choice, so
-    # the example is asked for either way.
-    page_examples, page_show = [""], [False]
+    # A file's page markers are taken out before collation — left in, they
+    # align as readings — and woven back into the golden document at the
+    # points where this witness turns its page.
+    page_examples = [None]
     if st.checkbox(
         "This text has page markers",
         value=False,
         key="pghas0",
-        help="Tick this if the file contains page or folio references such "
-        "as Pdf.50, p.292 or kha, 4r.7 (pdf 55). They are removed before "
-        "collation either way — left in, they align as readings and produce "
-        "spurious variants.",
+        help="Tick this if the file marks its pages, e.g. [V1.1v.1] or "
+        "[V1.272]. They are removed before collation and shown in the "
+        "golden document where each page begins.",
     ):
-        page_show[0] = st.checkbox(
-            "Cite them in the notes",
-            value=True,
-            key="pgshow0",
-            help="Cite this witness's own pagination in the notes, e.g. "
-            "`V1 (p.292) skyong]`. Each version keeps the format its own "
-            "source uses — nothing is converted. Untick to remove the "
-            "markers from the collation without citing them.",
-        )
+        page_examples[0] = ""
         page_examples[0] = st.text_input(
             "First page marker, exactly as it appears",
             value="",
@@ -1028,23 +1018,16 @@ for _i in range(n_comp):
                 key=f"lab{_i + 1}",
             )
         )
-        _ex, _show = "", False
+        _ex = None
         if st.checkbox(
             "This text has page markers",
             value=False,
             key=f"pghas{_i + 1}",
-            help="Tick this if the file contains page or folio references "
-            "such as Pdf.50, p.292 or kha, 4r.7 (pdf 55). They are removed "
-            "before collation either way.",
+            help="Tick this if the file marks its pages, e.g. [V2.145r.1] "
+            "or [V2.272]. They are removed before collation and shown in "
+            "the golden document where each page begins.",
         ):
-            _show = st.checkbox(
-                "Cite them in the notes",
-                value=True,
-                key=f"pgshow{_i + 1}",
-                help="Cite this witness's own pagination in the notes. Each "
-                "version keeps the format its own source uses. Untick to "
-                "remove the markers without citing them.",
-            )
+            _ex = ""
             _ex = st.text_input(
                 "First page marker, exactly as it appears",
                 value="",
@@ -1055,7 +1038,6 @@ for _i in range(n_comp):
                 "including changes of case, volume and recto/verso.",
             )
         page_examples.append(_ex)
-        page_show.append(_show)
 
 st.divider()
 st.subheader("3 · Options")
@@ -1162,6 +1144,26 @@ if run_btn and ready:
     # Counted before cleanup is applied, so the preview reflects the input.
     prep_preview = {nm: count_preprocessing_hits(t) for nm, t in zip(names, texts)}
 
+    # Page markers come out first. "Strip folio/page tags" removes anything
+    # bracketed, so running it first would delete [V1.1v.1] before this ever
+    # saw it. Their positions are kept so the golden document can show where
+    # each witness turned its page.
+    page_markers = []
+    for _i, _t in enumerate(texts):
+        _ex = page_examples[_i] if _i < len(page_examples) else None
+        if _ex is None:
+            page_markers.append([])
+            continue
+        texts[_i], _mk = extract_page_markers(_t, _ex)
+        page_markers.append(_mk)
+        if not _mk:
+            _what = f"the example `{_ex.strip()}`" if _ex.strip() else "the default [V1.1v.1] style"
+            st.warning(
+                f"**{names[_i]}** — no page markers matched {_what}. That "
+                "file will contribute no page references; check the example "
+                "matches how its pages are actually marked."
+            )
+
     golden_milestones = None
     if prep_tags:
         if prep_keep_tags:
@@ -1171,21 +1173,6 @@ if run_btn and ready:
         for _i in range(1, len(texts)):
             texts[_i] = strip_folio_tags(texts[_i])
 
-    # Page markers come out of every witness before alignment — left in, they
-    # collate as readings. Their positions are kept so a note can cite the
-    # page each witness was on.
-    page_markers = []
-    for _i, _t in enumerate(texts):
-        _ex = page_examples[_i] if _i < len(page_examples) else ""
-        texts[_i], _mk = extract_page_markers(_t, _ex)
-        page_markers.append(_mk)
-        if _ex.strip() and not _mk:
-            st.warning(
-                f"**{names[_i]}** — no page markers matched the example "
-                f"`{_ex.strip()}`. That file will contribute no page "
-                "references; check the example matches the file."
-            )
-
     # A witness left unchecked keeps whatever is in its text, and anything
     # left there is collated as a reading. Tibetan — in script or in Wylie —
     # carries no digits of its own, so a digit surviving folio-tag stripping
@@ -1193,8 +1180,7 @@ if run_btn and ready:
     # Cheap to detect and worth saying loudly, because the result is a note
     # like "V1 om.] V2 4r7 (pdf 55)" rather than an error.
     for _i, _t in enumerate(texts):
-        _ex = page_examples[_i] if _i < len(page_examples) else ""
-        if _ex.strip():
+        if (page_examples[_i] if _i < len(page_examples) else None) is not None:
             continue
         _hits = _DIGIT_TOKEN_RE.findall(_t)
         if _hits:
@@ -1233,10 +1219,7 @@ if run_btn and ready:
     with st.spinner("Building collation report…"):
         cells = collate_cells(
             aligned, labels, ignore_shad=ignore_shad, positive=positive,
-            markers=[
-                _mk if (_i < len(page_show) and page_show[_i]) else []
-                for _i, _mk in enumerate(page_markers)
-            ],
+            markers=page_markers,
         )
         report_buf, notes = export_collation_report(cells, labels, names)
 
