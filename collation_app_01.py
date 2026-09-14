@@ -1464,7 +1464,7 @@ ignore_shad = st.checkbox(
 apparatus_mode = st.radio(
     "Apparatus type",
     options=["Negative (only variants)", "Positive (all witnesses)"],
-    index=0,
+    index=1,
     help="Negative apparatus lists only the witnesses that differ from the "
     "base/golden reading. Positive apparatus lists every comparison witness "
     "at each variant point, including those that agree with the lemma.",
