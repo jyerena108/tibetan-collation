@@ -632,6 +632,55 @@ def _reattach_stranded_achung(*rows):
     return rows
 
 
+def _merge_final_achung(rows):
+    """Rejoin a final a-chung the aligner left standing in its own cell.
+
+    ``mda'`` and ``bka'`` come back as two cells, the word and then a cell
+    holding nothing but the apostrophe, so a note reports ``mnga`` against
+    ``mda`` — both readings a letter short of what the witnesses say.
+
+    This is the mirror of _reattach_stranded_achung(), which handles the
+    *initial* a-chung: ``su '`` + ``gyur`` becoming ``su `` + ``'gyur``, so an
+    added a-chung reads ``gyur] 'gyur`` rather than a bare apostrophe. What
+    separates the two is the character the previous cell ends on —
+
+        mnga  +  '        ends in a letter  -> final, belongs backward
+        su    +  ' gyur   ends in a space   -> initial, belongs forward
+
+    so only the first is merged here, and the forward rule keeps the second.
+    Cells are left alone when any witness has a gap in either of them, so an
+    omission is never swallowed.
+    """
+    if not rows:
+        return rows
+    width = max(len(r) for r in rows)
+    for r in rows:
+        r.extend([""] * (width - len(r)))
+    j = width - 1
+    while j >= 1:
+        here = [r[j] for r in rows]
+        prev = [r[j - 1] for r in rows]
+        gap = any(c == "-" for c in here) or any(p == "-" for p in prev)
+        lone = any(c.strip() for c in here) and all(
+            (not c.strip())
+            or all(ch in A_CHUNG_CHARS or ch.isspace() for ch in c)
+            for c in here
+        )
+        backward = any(
+            p
+            and p[-1] not in _SEP_CHARS
+            and p[-1] not in SHAD_CHARS
+            and p[-1] not in A_CHUNG_CHARS
+            for p in prev
+        )
+        if lone and backward and not gap:
+            for r in rows:
+                r[j - 1] = r[j - 1] + r[j]
+                del r[j]
+        j -= 1
+    return rows
+
+
 def _merge_split_stacks(rows):
     """Rejoin a cell the aligner cut in the middle of a stacked word.
 
@@ -684,6 +733,7 @@ def align_witnesses(texts):
 
     aligned = [token_row_to_text_row(row_matrix[i], t) for i, t in enumerate(texts)]
     _reattach_stranded_achung(*aligned)
+    _merge_final_achung(aligned)
     _merge_split_stacks(aligned)
     return aligned
 
