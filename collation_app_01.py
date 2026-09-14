@@ -1,13 +1,20 @@
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "Pydurma", "src"))
 """
 Tibetan Collation Web App — Streamlit
 ======================================
 Run with:
     pip install streamlit bayoo-docx
-    streamlit run collation_app.py
+    streamlit run collation_app_01.py
+
+This has to stay the very first statement in the file. Anywhere below the
+sys.path line it stops being a docstring and becomes a bare expression, which
+Streamlit's magic renders onto the page — the app used to open with a second
+<h1> reading "Tibetan Collation Web App — Streamlit" above its real title.
 """
+
+import sys
+import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "Pydurma", "src"))
 
 import io
 import re
@@ -1252,15 +1259,22 @@ st.set_page_config(
 )
 
 st.title("📜 Tibetan Collation Tool")
-st.caption("Upload your texts, run the collation, and download the Word outputs.")
+st.caption(
+    "Collate two to six Tibetan witnesses into a critical apparatus. "
+    "You get a collation report and a golden text with footnotes, in Word."
+)
 
 st.divider()
 
-# ── File uploads
-st.subheader("1 · Upload texts")
+# ── Step 1: where the texts come from
+# This reshapes the whole form, so it is asked before anything else and on its
+# own — it used to sit inside a step headed "Upload texts", which presumed the
+# answer.
+st.subheader("1 · Where the texts come from")
 
 source_mode = st.radio(
     "Source",
+    label_visibility="collapsed",
     options=["Upload .txt files", "Google Doc links", "Upload a collation report"],
     index=0,
     horizontal=True,
@@ -1302,6 +1316,9 @@ base_link = ""
 comp_files, comp_links, comp_labels = [], [], []
 page_examples = []
 
+st.divider()
+st.subheader("2 · The witnesses")
+
 if use_report:
     report_file = st.file_uploader(
         "Collation report (.docx)",
@@ -1316,11 +1333,6 @@ if use_report:
             report_labels, report_texts = parse_collation_report(
                 report_file.getvalue()
             )
-            st.success(
-                f"Read **{len(report_labels)}** witnesses — "
-                + ", ".join(report_labels)
-                + f" · base **{report_labels[0]}**"
-            )
         except ValueError as _exc:
             st.error(str(_exc))
             report_labels, report_texts = [], []
@@ -1329,97 +1341,140 @@ if use_report:
         label1 = report_labels[0]
         comp_labels = list(report_labels[1:])
         n_comp = len(comp_labels)
-        st.divider()
-        st.subheader("2 · Page markers")
+        st.caption(
+            f"Read **{len(report_labels)}** witnesses from the report. "
+            "The sigla and the base come from its header row."
+        )
         _cols = st.columns(min(len(report_labels), 3))
         for _i, _lb in enumerate(report_labels):
             with _cols[_i % len(_cols)]:
-                st.markdown(f"**{_lb}**" + (" · base" if _i == 0 else ""))
-                page_examples.append(_page_marker_controls(_i, _lb))
+                with st.container(border=True):
+                    st.markdown(
+                        f"**{_lb}**"
+                        + ("  ·  base" if _i == 0 else "")
+                    )
+                    page_examples.append(_page_marker_controls(_i, _lb))
     else:
         label1 = "V1"
         n_comp = 0
 else:
-    col_a, col_b = st.columns([1, 1])
-    with col_a:
+    # Base and comparisons are the same kind of thing — witnesses — so they
+    # live in one step, each in its own bordered card. Loose stacked controls
+    # became unreadable at five comparisons.
+    with st.container(border=True):
+        st.markdown("**Base**  ·  the apparatus is anchored here")
         if use_links:
             base_link = st.text_input(
-                "Base / golden text — Google Doc link",
+                "Google Doc link",
                 key="lnk0",
                 placeholder="https://docs.google.com/document/d/…/edit?tab=t.…",
             )
         else:
             base_file = st.file_uploader(
-                "Base / golden text (.txt)",
+                "Base text (.txt)",
                 type=["txt"],
-                help="This is the primary version — all notes are anchored here.",
             )
-        label1 = st.text_input("Label for base text", value="V1")
+        label1 = st.text_input("Siglum", value="V1", key="lab0")
         page_examples.append(_page_marker_controls(0, label1))
 
-    with col_b:
-        n_comp = int(
-            st.number_input(
-                "Number of comparison texts",
-                min_value=1,
-                max_value=5,
-                value=2,
-                step=1,
-                help="Up to five witnesses can be collated against the base.",
-            )
+    n_comp = int(
+        st.columns([1, 2])[0].number_input(
+            "Comparison texts",
+            min_value=1,
+            max_value=5,
+            value=2,
+            step=1,
+            help="Up to five witnesses can be collated against the base.",
         )
+    )
 
-    st.divider()
-    st.subheader("2 · Comparison text(s)")
-
-    # Laid out three to a row so five uploaders stay readable.
+    # Three to a row so five stay readable.
     _cols = st.columns(min(n_comp, 3))
     for _i in range(n_comp):
         with _cols[_i % len(_cols)]:
-            if use_links:
-                comp_files.append(None)
-                comp_links.append(
+            with st.container(border=True):
+                _default_siglum = f"V{_i + 2}"
+                st.markdown(f"**Comparison {_i + 1}**")
+                if use_links:
+                    comp_files.append(None)
+                    comp_links.append(
+                        st.text_input(
+                            "Google Doc link",
+                            key=f"lnk{_i + 1}",
+                            placeholder="https://docs.google.com/document/d/…",
+                        )
+                    )
+                else:
+                    comp_links.append("")
+                    comp_files.append(
+                        st.file_uploader(
+                            "Text (.txt)", type=["txt"], key=f"c{_i + 1}"
+                        )
+                    )
+                comp_labels.append(
                     st.text_input(
-                        f"Comparison text {_i + 1} — Google Doc link",
-                        key=f"lnk{_i + 1}",
-                        placeholder="https://docs.google.com/document/d/…/edit?tab=t.…",
+                        "Siglum", value=_default_siglum, key=f"lab{_i + 1}"
                     )
                 )
-            else:
-                comp_links.append("")
-                comp_files.append(
-                    st.file_uploader(
-                        f"Comparison text {_i + 1} (.txt)", type=["txt"],
-                        key=f"c{_i + 1}",
-                    )
+                page_examples.append(
+                    _page_marker_controls(_i + 1, _default_siglum)
                 )
-            comp_labels.append(
-                st.text_input(
-                    f"Label for comparison {_i + 1}",
-                    value=f"V{_i + 2}",
-                    key=f"lab{_i + 1}",
-                )
-            )
-            page_examples.append(_page_marker_controls(_i + 1, f"V{_i + 2}"))
 
 st.divider()
-st.subheader("3 · Options")
+st.subheader("3 · How to collate")
 
-with st.expander("Preprocessing", expanded=True):
+# Ordered by what each option affects. The two editorial decisions — what the
+# notes look like, and what counts as a difference — stay visible; how the
+# files are read is plumbing and folds away, with a count so the state is
+# still legible while closed.
+apparatus_mode = st.radio(
+    "Apparatus",
+    options=["Negative (only variants)", "Positive (all witnesses)"],
+    index=1,
+    captions=[
+        "Lists only the witnesses that differ from the base.",
+        "Lists every witness at each variant, including those that agree.",
+    ],
+)
+positive = apparatus_mode.startswith("Positive")
+
+ignore_shad = st.checkbox(
+    "Ignore shad (།) differences",
+    value=True,
+    key="ignoreshad",
+    help="When checked, differences that consist only of shad punctuation "
+    "(།, ༎, ༔ …) are not reported as variant notes. Uncheck to have shad "
+    "differences show up in the apparatus.",
+)
+
+# The expander label reports how many cleanup options are on. Their values
+# come from session_state because the checkboxes live inside the expander and
+# so have not been drawn yet at this point; before the first interaction
+# session_state is empty and the defaults (all on) stand.
+_PREP_KEYS = ("prep_tags", "prep_keep", "prep_us", "prep_pipe", "prep_head")
+_prep_on = sum(bool(st.session_state.get(k, True)) for k in _PREP_KEYS)
+
+with st.expander(
+    f"Reading the files — folio tags, _, |, head marks   ·   {_prep_on} of 5 on",
+    expanded=False,
+):
     st.caption(
         "Cleanup applied before collation. Each option only takes effect if "
-        "its pattern actually appears in your files — otherwise it changes "
-        "nothing. Leaving them all checked is safe."
+        "its pattern actually appears in your texts — otherwise it changes "
+        "nothing. Leaving them all on is safe."
     )
     prep_tags = st.checkbox(
         "Strip folio/page tags like [354], [zhe 1]",
         value=True,
+        key="prep_tags",
         help="Bracketed reference markers are removed before alignment so "
-        "they don't show up as spurious variants.",
+        "they don't show up as spurious variants. Page markers such as "
+        "[V1.1v.1] are handled separately and are not affected.",
     )
     prep_keep_tags = st.checkbox(
         "↳ …but keep the base text's tags in the golden output as milestones",
         value=True,
+        key="prep_keep",
         disabled=not prep_tags,
         help="The stripped tags from the base/golden text are re-inserted "
         "into the downloaded golden document (in italics, at their original "
@@ -1430,41 +1485,27 @@ with st.expander("Preprocessing", expanded=True):
     prep_underscore = st.checkbox(
         "Treat _ as a space (EWTS explicit space)",
         value=True,
+        key="prep_us",
         help="In EWTS transliteration an underscore marks an explicit space. "
         "Without this, e.g. pa/_bdag and pa/ bdag read as different words.",
     )
     prep_pipe = st.checkbox(
         "Treat | as a shad (EWTS / OCR)",
         value=True,
+        key="prep_pipe",
         help="Some OCR output writes the shad as a pipe. With this on, | "
         "behaves exactly like / — ignored or reported together with shad.",
     )
     prep_head = st.checkbox(
         "Ignore head marks @ # ! (yig-mgo ༄༅)",
         value=True,
+        key="prep_head",
         help="These transliterate the ornamental head marks that open a "
         "section; they are structural, not textual, so they never count as "
         "variants.",
     )
 
-ignore_shad = st.checkbox(
-    "Ignore shad (།) differences",
-    value=True,
-    help="When checked, differences that consist only of shad punctuation "
-    "(།, ༎, ༔ …) are not reported as variant notes. Uncheck to have shad "
-    "differences show up in the apparatus.",
-)
-
-apparatus_mode = st.radio(
-    "Apparatus type",
-    options=["Negative (only variants)", "Positive (all witnesses)"],
-    index=1,
-    help="Negative apparatus lists only the witnesses that differ from the "
-    "base/golden reading. Positive apparatus lists every comparison witness "
-    "at each variant point, including those that agree with the lemma.",
-)
-positive = apparatus_mode.startswith("Positive")
-
+st.divider()
 st.subheader("4 · Run")
 
 if use_report:
@@ -1475,12 +1516,14 @@ else:
     ready = base_file is not None and all(f is not None for f in comp_files)
 
 if not ready:
-    st.info(
-        "Upload a collation report above to enable the collation."
+    # A caption, not an alert: the disabled button already says it cannot run,
+    # so this only needs to say what is missing.
+    st.caption(
+        "Upload a collation report above to enable this."
         if use_report else
-        "Paste a link for every text above to enable the collation."
+        "Paste a link for every witness above to enable this."
         if use_links else
-        "Upload all required files above to enable the collation."
+        "Upload a file for every witness above to enable this."
     )
 
 run_btn = st.button("▶ Run Collation", disabled=not ready, type="primary")
