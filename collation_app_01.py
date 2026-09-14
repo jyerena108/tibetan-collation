@@ -27,7 +27,7 @@ from pathlib import Path
 
 import streamlit as st
 from docx import Document
-from docx.shared import Pt
+from docx.shared import Inches, Mm, Pt
 from docx.enum.text import WD_LINE_SPACING
 from docx.enum.section import WD_ORIENT
 from docx.oxml import OxmlElement
@@ -454,18 +454,31 @@ def apply_preprocessing_options(
 #  CORE LOGIC (unchanged from your script)
 # ─────────────────────────────────────────────
 
-def set_landscape(document):
-    """Turn the document landscape.
+# A3 landscape, in the units python-docx wants. The report is a table of up
+# to six witnesses side by side and is also what gets edited by hand when
+# correcting OCR, so width is the thing it needs most. Letter landscape left
+# 8.5in of usable width once python-docx's 1.25in side margins were taken out
+# — 1.42in a column at six witnesses. A3 with half-inch margins gives 15.54in,
+# and is three inches taller as well, so more rows fit too. A3 is a standard
+# size everything handles; a custom page wider than this prints unpredictably.
+REPORT_PAGE_WIDTH = Mm(420)
+REPORT_PAGE_HEIGHT = Mm(297)
+REPORT_SIDE_MARGIN = Inches(0.5)
+REPORT_TOP_MARGIN = Inches(0.6)
 
-    python-docx does not swap the page dimensions when the orientation is
-    changed, so width and height have to be exchanged by hand \u2014 otherwise Word
-    still lays the page out portrait and the setting appears to do nothing.
-    """
+
+def set_report_page(document):
+    """Put the report on a wide A3 landscape page with narrow side margins."""
     for section in document.sections:
-        w, h = section.page_width, section.page_height
-        if w < h:
-            section.orientation = WD_ORIENT.LANDSCAPE
-            section.page_width, section.page_height = h, w
+        section.orientation = WD_ORIENT.LANDSCAPE
+        # python-docx does not swap the dimensions when the orientation is
+        # set, so they are given explicitly rather than exchanged.
+        section.page_width = REPORT_PAGE_WIDTH
+        section.page_height = REPORT_PAGE_HEIGHT
+        section.left_margin = REPORT_SIDE_MARGIN
+        section.right_margin = REPORT_SIDE_MARGIN
+        section.top_margin = REPORT_TOP_MARGIN
+        section.bottom_margin = REPORT_TOP_MARGIN
 
 
 def ensure_footnote_reference_style(document):
@@ -989,7 +1002,7 @@ def export_collation_report(cells, labels, names):
     squeezes Tibetan script too narrow to read comfortably.
     """
     doc = Document()
-    set_landscape(doc)
+    set_report_page(doc)
     doc.add_heading("Tibetan Collation Report", level=1)
     header = f"Base / golden: {names[0]}"
     for i, nm in enumerate(names[1:], start=1):
