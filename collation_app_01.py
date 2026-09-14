@@ -1793,14 +1793,16 @@ apparatus_mode = st.radio(
 )
 positive = apparatus_mode.startswith("Positive")
 
-want_profile = st.checkbox(
-    "Add an orthographic profile to the report",
+prep_stack = st.checkbox(
+    "Treat + as a stacking mark — seng+ge matches seng ge",
     value=False,
-    key="wantprofile",
-    help="A table at the end of the report counting, per witness, the "
-    "features normalised before comparison — stacked consonants, head marks, "
-    "pipes written for shad, explicit spaces, shad. They describe the "
-    "witnesses rather than the text, and are otherwise invisible.",
+    key="prep_stack",
+    help="EWTS + forces a stacked consonant, so seng+ge and seng ge are the "
+    "same word written two ways — one after the Sanskrit, one the naturalised "
+    "Tibetan spelling. Off by default, so the difference is reported and you "
+    "can see it; tick it to treat the two as one reading. Either way + is "
+    "never removed from a reading, so a real variant still prints as d+hi, "
+    "and the orthographic profile counts what ticking this hides.",
 )
 
 ignore_shad = st.checkbox(
@@ -1812,16 +1814,25 @@ ignore_shad = st.checkbox(
     "differences show up in the apparatus.",
 )
 
+want_profile = st.checkbox(
+    "Add an orthographic profile to the report",
+    value=False,
+    key="wantprofile",
+    help="A table at the end of the report counting, per witness, the "
+    "features normalised before comparison — stacked consonants, head marks, "
+    "pipes written for shad, explicit spaces, shad. They describe the "
+    "witnesses rather than the text, and are otherwise invisible.",
+)
+
 # The expander label reports how many cleanup options are on. Their values
 # come from session_state because the checkboxes live inside the expander and
 # so have not been drawn yet at this point; before the first interaction
 # session_state is empty and the defaults (all on) stand.
-_PREP_KEYS = ("prep_tags", "prep_keep", "prep_us", "prep_pipe", "prep_head",
-              "prep_stack")
+_PREP_KEYS = ("prep_tags", "prep_keep", "prep_us", "prep_pipe", "prep_head")
 _prep_on = sum(bool(st.session_state.get(k, True)) for k in _PREP_KEYS)
 
 with st.expander(
-    f"Reading the files — folio tags, _, |, +, head marks   ·   "
+    f"Reading the files — folio tags, _, |, head marks   ·   "
     f"{_prep_on} of {len(_PREP_KEYS)} on",
     expanded=False,
 ):
@@ -1862,17 +1873,6 @@ with st.expander(
         key="prep_pipe",
         help="Some OCR output writes the shad as a pipe. With this on, | "
         "behaves exactly like / — ignored or reported together with shad.",
-    )
-    prep_stack = st.checkbox(
-        "Treat + as a stacking mark — seng+ge matches seng ge",
-        value=True,
-        key="prep_stack",
-        help="EWTS + forces a stacked consonant, so seng+ge and seng ge are "
-        "the same word written two ways — one after the Sanskrit, one the "
-        "naturalised Tibetan spelling. A graphic variant, not a textual one. "
-        "Untick to report it as a difference. Either way + is never removed "
-        "from a reading, so a real variant still prints as d+hi, and the "
-        "orthographic profile counts what this hides.",
     )
     prep_head = st.checkbox(
         "Ignore head marks @ # ! (yig-mgo ༄༅)",
