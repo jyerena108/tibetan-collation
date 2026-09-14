@@ -764,65 +764,85 @@ A_CHUNG_CHARS = set(["འ", "'"]) | set(_APOSTROPHE_VARIANTS)
 _SYLLABLE_SEP_RE = re.compile(r"[་༌\s]+")
 
 
-def _syllables(seg: str, ignore_shad: bool):
-    """Split an aligned segment into display syllables.
+def _syllable_spans(seg: str, ignore_shad: bool):
+    """Split a segment into display syllables, keeping where each one sits.
 
-    Tsheg and whitespace act as separators (and are dropped). Shad is removed
-    only when shad differences are ignored, so it stays visible otherwise.
-    Letters (and any residual marks) are preserved inside each syllable. A bare
+    Returns ``[(text, start, end)…]`` with start/end indexing ``seg`` itself,
+    so a caller can both read a syllable and point at it. _syllables() is the
+    text-only view of this, which keeps the note and the footnote marker
+    working from one splitting — they used to disagree, and the marker ended
+    up at the end of the cell rather than on the word the note is about.
+
+    Tsheg and whitespace separate (and are dropped). Shad separates only when
+    shad differences are ignored, so it stays visible otherwise. A bare
     a-chung is re-attached to its neighbour rather than kept as its own token.
+
+    Every substitution below is length-preserving, so positions in the working
+    copy are positions in ``seg``.
     """
     if not seg:
         return []
-    # Fold typographic apostrophes here too, so a note reports the Tibetan
-    # reading ('das) rather than the typographic accident (‘das). This only
-    # affects note text: the golden document emits the base's own characters
-    # directly and is never routed through here.
+    # Fold typographic apostrophes so a note reports the Tibetan reading
+    # ('das) rather than the typographic accident (‘das). One character for
+    # one character, so offsets are unaffected.
     s = normalize_apostrophes(seg)
     if ignore_shad:
-        # Replace the shad with a space rather than deleting it. The shad is
-        # itself a word separator, so "ba//mtshan" has no other break between
-        # the two words; deleting it rendered them fused as "bamtshan" while
-        # a witness writing "ba'i mtshon" rendered correctly. The comparison
-        # keys were always right (whitespace is ignored there), so this was a
-        # display fault only — and it also split groups, since witnesses are
-        # grouped by their displayed reading.
+        # A space, not a deletion: the shad is itself a word separator, so
+        # "ba//mtshan" has no other break between its two words and deleting
+        # it rendered them fused as "bamtshan".
         for ch in SHAD_CHARS:
             s = s.replace(ch, " ")
-    # Drop ignorable non-content characters (head marks, western punctuation)
-    # from the display so readings never show e.g. "@#" from a source file.
-    parts = []
-    for p in _SYLLABLE_SEP_RE.split(s):
-        p = "".join(c for c in p if c not in PUNCT_TO_IGNORE_BASE)
-        if p:
-            parts.append(p)
+
+    spans = []
+    for m in re.finditer(r"[^\s་༌_]+" if "_" in _SEP_CHARS else r"[^\s་༌]+", s):
+        # Drop ignorable non-content characters (head marks, western
+        # punctuation) so readings never show e.g. "@#" from a source file.
+        text = "".join(c for c in m.group(0) if c not in PUNCT_TO_IGNORE_BASE)
+        if text:
+            spans.append([text, m.start(), m.end()])
+
     merged = []
-    pending = ""  # a leading bare a-chung waiting to attach to the next syllable
-    for p in parts:
-        if all(c in A_CHUNG_CHARS for c in p):
+    pending = ""
+    pending_start = None
+    for text, start, end in spans:
+        if all(c in A_CHUNG_CHARS for c in text):
             if merged:
-                merged[-1] = merged[-1] + p
+                merged[-1][0] += text
+                merged[-1][2] = end
             else:
-                pending += p
+                pending += text
+                if pending_start is None:
+                    pending_start = start
         else:
-            merged.append(pending + p)
+            merged.append([pending + text,
+                           pending_start if pending_start is not None else start,
+                           end])
             pending = ""
+            pending_start = None
     if pending:
-        merged.append(pending)
-    return merged
+        merged.append([pending, pending_start, pending_start + len(pending)])
+    return [tuple(m) for m in merged]
+
+
+def _syllables(seg: str, ignore_shad: bool):
+    """The display syllables of a segment — the text view of _syllable_spans."""
+    return [text for text, _start, _end in _syllable_spans(seg, ignore_shad)]
 
 
 def _trim_common_syllables(readings):
     """Trim syllables shared by *all* readings at the start and the end.
 
-    ``readings`` is a list of syllable-lists. Returns new syllable-lists with
-    the common leading/trailing syllables removed, so only the differing part
-    remains. Because at least one reading always differs when a note exists,
+    ``readings`` is a list of syllable-lists. Returns ``(trimmed, pre)`` —
+    the syllable-lists with the common leading and trailing syllables removed
+    so only the differing part remains, and how many were taken off the front.
+    That count is what lets the footnote marker be placed on the lemma rather
+    than at the end of the cell. Because at least one reading always differs when a note exists,
     this never trims a reading down to nothing on every side simultaneously.
     """
     readings = [list(r) for r in readings]
     if len(readings) < 2:
-        return readings
+        return readings, 0
+
     # common prefix
     n = min(len(r) for r in readings)
     pre = 0
@@ -836,7 +856,7 @@ def _trim_common_syllables(readings):
         suf += 1
     if suf:
         readings = [r[: len(r) - suf] for r in readings]
-    return readings
+    return readings, pre
 
 
 _TIBETAN_CHAR_RE = re.compile(r"[ༀ-࿿]")
@@ -860,7 +880,10 @@ def build_note_text(segs, labels, positive=False, ignore_shad=True):
 
     ``segs`` and ``labels`` are base-first: index 0 is the base/golden witness
     and the rest are comparison witnesses, however many there are. Returns
-    ``(note_text, lemma)``; note_text is "" when no witness differs.
+    ``(note_text, lemma, lemma_end)``; note_text is "" when no witness
+    differs, and lemma_end is the index, in the base's own syllables, just
+    past the lemma — what the golden document uses to put the marker on the
+    word the note is about rather than at the end of the cell.
 
     Format: ``<baseSigla> <lemma>] <sigla> <reading>; <sigla> <reading>``
 
@@ -887,7 +910,13 @@ def build_note_text(segs, labels, positive=False, ignore_shad=True):
     # comparison keys (punctuation/tsheg-insensitive) decide agreement
     keys = [strip_ignorable(s, ignore_shad) for s in segs]
     # display syllables, with syllables shared by every witness trimmed away
-    trimmed = _trim_common_syllables([_syllables(s, ignore_shad) for s in segs])
+    trimmed, pre = _trim_common_syllables(
+        [_syllables(s, ignore_shad) for s in segs]
+    )
+    # Where the lemma ends, counted in the base's own syllables. For an
+    # omission the lemma is empty and this marks the gap itself — the point
+    # the missing words would occupy — which is where the marker belongs.
+    lemma_end = pre + len(trimmed[0])
 
     lemma = _reading_display(trimmed[0])
     base_key = keys[0]
@@ -900,7 +929,7 @@ def build_note_text(segs, labels, positive=False, ignore_shad=True):
         (siglum(i), trimmed[i]) for i in range(1, len(segs)) if keys[i] != base_key
     ]
     if not selected:
-        return "", lemma
+        return "", lemma, lemma_end
 
     # group witnesses that share the same displayed reading, preserving order
     groups = []  # list of [reading_display, [labels...]]
@@ -914,7 +943,8 @@ def build_note_text(segs, labels, positive=False, ignore_shad=True):
             groups.append([disp, [lab]])
 
     parts = [f"{', '.join(labs)} {disp}" for disp, labs in groups]
-    return f"{', '.join(lemma_labels)} {lemma}] " + "; ".join(parts), lemma
+    return (f"{', '.join(lemma_labels)} {lemma}] " + "; ".join(parts),
+            lemma, lemma_end)
 
 
 # One record per aligned cell, shared by both exporters.
@@ -953,7 +983,8 @@ PageMark = namedtuple("PageMark", "witness own_at base_at text")
 
 
 CollatedCell = namedtuple(
-    "CollatedCell", "segs norms diffs base_missing has_diff note lemma page_marks"
+    "CollatedCell",
+    "segs norms diffs base_missing has_diff note lemma lemma_end page_marks",
 )
 
 
@@ -1035,15 +1066,15 @@ def collate_cells(aligned, labels, ignore_shad=True, positive=False, markers=Non
 
         has_diff = (base_norm != "" and any(diffs)) or base_missing
 
-        note, lemma = "", ""
+        note, lemma, lemma_end = "", "", 0
         if has_diff:
-            note, lemma = build_note_text(
+            note, lemma, lemma_end = build_note_text(
                 segs, labels, positive=positive, ignore_shad=ignore_shad
             )
 
         cells.append(
             CollatedCell(segs, norms, diffs, base_missing, has_diff, note,
-                         lemma, page_marks)
+                         lemma, lemma_end, page_marks)
         )
 
     # Markers past the last cell (a page turning at the very end) still belong
@@ -1300,7 +1331,8 @@ def export_versions_document(texts, labels, patterns=None):
     return buf
 
 
-def export_golden_with_footnotes(cells, notes, labels, name1="base", milestones=None):
+def export_golden_with_footnotes(cells, notes, labels, name1="base",
+                                 milestones=None, ignore_shad=True):
     """Golden text with variant footnotes.
 
     ``cells`` is the very list the report was built from, so footnote numbering
@@ -1380,6 +1412,17 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base", milestones=
                     cut -= 1
             if cut == 0:  # nothing to anchor to — keep the original placement
                 cut = len(seg.rstrip())
+
+            # One cell can hold several words while the note is about one of
+            # them: "'di//'on te mi " carries a note on "'on te", and a marker
+            # at the end of the cell attached it to "mi". Anchor to the end of
+            # the lemma instead. An omission has an empty lemma and lemma_end
+            # then points at the gap the missing words would occupy.
+            spans = _syllable_spans(seg, ignore_shad)
+            if 0 < cell.lemma_end <= len(spans):
+                cut = spans[cell.lemma_end - 1][2]
+            elif cell.lemma_end == 0 and spans:
+                cut = spans[0][1]
             inserts.append((cut, 1, None))
         elif place_note:
             inserts.append((0, 1, None))
@@ -1892,7 +1935,8 @@ if run_btn and ready:
     try:
         with st.spinner("Building footnote document…"):
             footnote_buf = export_golden_with_footnotes(
-                cells, notes, labels, name1=names[0], milestones=golden_milestones
+                cells, notes, labels, name1=names[0],
+                milestones=golden_milestones, ignore_shad=ignore_shad,
             )
     except AttributeError:
         st.warning(
