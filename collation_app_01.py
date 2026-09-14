@@ -65,6 +65,10 @@ PUNCT_TO_IGNORE_CORE = set([
     " ", "\n", "\t", ",", ".", "?", ":", ";",
 ])
 
+# Characters neutral for matching but still printed in a reading — see
+# stack_mark_as_same in apply_preprocessing_options().
+COMPARE_ONLY_IGNORE = set()
+
 # Effective sets — (re)built by apply_preprocessing_options() below. The UI
 # calls it with the user's preprocessing choices before running a collation;
 # the module-level call further down installs the defaults for library use.
@@ -422,6 +426,7 @@ def apply_preprocessing_options(
     underscore_as_space=True,
     pipe_as_shad=True,
     ignore_head_marks=True,
+    stack_mark_as_same=True,
 ):
     """Install the effective character sets used by the collation.
 
@@ -431,12 +436,20 @@ def apply_preprocessing_options(
     - pipe_as_shad: ``|`` is an alternate EWTS shad (common in OCR output).
     - ignore_head_marks: ``@``, ``#``, ``!`` transliterate yig-mgo ornaments
       (༄༅ …), which are structural, not textual.
+    - stack_mark_as_same: EWTS ``+`` forces a stacked consonant, so
+      ``seng+ge`` and ``seng ge`` are the same word written two ways — one
+      following the Sanskrit original, one the naturalised Tibetan spelling.
+      That is a graphic variant, not a textual one, and repeating it through
+      an apparatus buries the readings that matter. Ignored here for matching
+      only: ``+`` is never removed from a reading, so a genuine variant still
+      prints as ``d+hi``. The orthographic profile counts what this hides.
 
     Rebinding the module-level sets keeps every existing function signature
     unchanged; the display/golden text itself is never rewritten by these.
     """
     global SHAD_CHARS, PUNCT_TO_IGNORE_BASE, PUNCT_TO_IGNORE
-    global _SYLLABLE_SEP_RE, _SEP_CHARS
+    global _SYLLABLE_SEP_RE, _SEP_CHARS, COMPARE_ONLY_IGNORE
+    COMPARE_ONLY_IGNORE = {"+"} if stack_mark_as_same else set()
     SHAD_CHARS = set(SHAD_CHARS_CORE) | ({"|"} if pipe_as_shad else set())
     PUNCT_TO_IGNORE_BASE = (
         set(PUNCT_TO_IGNORE_CORE)
@@ -561,7 +574,8 @@ def strip_ignorable(s: str, ignore_shad: bool = True) -> str:
     key consistent with the display, so an invisible space can't masquerade as
     content and produce an empty "om.] … om." note.
     """
-    ignore_set = PUNCT_TO_IGNORE if ignore_shad else PUNCT_TO_IGNORE_BASE
+    ignore_set = (PUNCT_TO_IGNORE if ignore_shad else PUNCT_TO_IGNORE_BASE)
+    ignore_set = ignore_set | COMPARE_ONLY_IGNORE
     s = normalize_apostrophes(s)
     if not ignore_shad and "|" in SHAD_CHARS:
         # "|" and "/" are the same shad in different notation; when shad is
@@ -618,6 +632,36 @@ def _reattach_stranded_achung(*rows):
     return rows
 
 
+def _merge_split_stacks(rows):
+    """Rejoin a cell the aligner cut in the middle of a stacked word.
+
+    Pydurma's tokenizer treats ``+`` as a token boundary, so ``seng+ge`` comes
+    back as two tokens where ``seng ge`` comes back as one pair — the columns
+    no longer line up and a note reports the fragment ``seng+`` against
+    ``seng``. Merging the cell that ends in ``+`` with the one after it puts
+    the word back together, so a reading is never half a word.
+
+    Done whatever the stacking option is set to: this is about not reporting
+    fragments, which is wrong either way. Cells are left alone when any
+    witness has a gap in either of them, so an omission is never swallowed.
+    """
+    if not rows:
+        return rows
+    width = max(len(r) for r in rows)
+    for r in rows:
+        r.extend([""] * (width - len(r)))
+    j = width - 2
+    while j >= 0:
+        cut = any(r[j].rstrip().endswith("+") for r in rows)
+        gap = any(r[j] == "-" or r[j + 1] == "-" for r in rows)
+        if cut and not gap:
+            for r in rows:
+                r[j] = r[j] + r[j + 1]
+                del r[j + 1]
+        j -= 1
+    return rows
+
+
 def align_witnesses(texts):
     """Align any number of witnesses against the first one (the base).
 
@@ -640,6 +684,7 @@ def align_witnesses(texts):
 
     aligned = [token_row_to_text_row(row_matrix[i], t) for i, t in enumerate(texts)]
     _reattach_stranded_achung(*aligned)
+    _merge_split_stacks(aligned)
     return aligned
 
 
@@ -995,7 +1040,72 @@ def _write_cell(para, text, marks, shade):
             set_run_background_color(run, shade)
 
 
-def export_collation_report(cells, labels, names):
+# What each row of the orthographic profile counts. These are features the
+# collation normalises away, so without this table they leave no trace — yet
+# they describe a witness: which scriptorium stacked its Sanskrit loans, which
+# transcription used EWTS conventions. Stated once here rather than repeated
+# through the apparatus, where a pattern of nine identical notes is invisible.
+#
+# Typographic apostrophes and non-breaking spaces are deliberately absent.
+# They are artefacts of how a file was produced, not properties of the
+# witness; both are still normalised, they are simply not evidence.
+_STACK_WORD_RE = re.compile(r"[A-Za-z']*\+[A-Za-z']*")
+
+ORTHOGRAPHIC_FEATURES = (
+    ("Stacked consonants  +", lambda t: len(re.findall(r"[A-Za-z']\+[A-Za-z']", t))),
+    ("Head marks  @ # !", lambda t: sum(t.count(c) for c in "@#!")),
+    ("Pipe written for shad  |", lambda t: t.count("|")),
+    ("Explicit space  _", lambda t: t.count("_")),
+    ("Shad  /", lambda t: t.count("/")),
+)
+
+
+def orthographic_profile(texts, labels):
+    """Per-witness counts of the features normalised before comparison.
+
+    Returns ``(rows, stacked)`` where rows is ``[(feature, [counts…])…]`` and
+    stacked maps each label to the distinct stacked forms it uses.
+    """
+    rows = [(name, [fn(t) for t in texts]) for name, fn in ORTHOGRAPHIC_FEATURES]
+    stacked = {}
+    for label, text in zip(labels, texts):
+        forms = sorted({m.group(0).strip("/") for m in _STACK_WORD_RE.finditer(text)})
+        stacked[label] = [f for f in forms if f]
+    return rows, stacked
+
+
+def add_orthographic_profile(doc, texts, labels):
+    """Append the profile to the report."""
+    rows, stacked = orthographic_profile(texts, labels)
+    doc.add_paragraph()
+    doc.add_heading("Orthographic profile", level=2)
+    doc.add_paragraph(
+        "Features normalised before comparison and therefore absent from the "
+        "apparatus. They describe the witnesses rather than the text."
+    )
+    table = doc.add_table(rows=1, cols=len(labels) + 1)
+    hdr = table.rows[0].cells
+    hdr[0].text = ""
+    for i, label in enumerate(labels):
+        hdr[i + 1].text = label
+    for name, counts in rows:
+        cells = table.add_row().cells
+        cells[0].text = name
+        for i, n in enumerate(counts):
+            cells[i + 1].text = str(n)
+
+    if any(stacked.values()):
+        doc.add_paragraph()
+        doc.add_paragraph("Stacked forms, by witness:")
+        for label in labels:
+            forms = stacked.get(label) or []
+            p = doc.add_paragraph()
+            run = p.add_run(f"{label}  ")
+            run.bold = True
+            p.add_run(", ".join(forms) if forms else "—")
+
+
+def export_collation_report(cells, labels, names, profile_texts=None):
     """Side-by-side table of every witness, plus the numbered notes list.
 
     The page is landscape: with up to six witness columns a portrait page
@@ -1069,6 +1179,9 @@ def export_collation_report(cells, labels, names):
             r.bold = True
             p.add_run(" ")
             p.add_run(text)
+
+    if profile_texts:
+        add_orthographic_profile(doc, profile_texts, labels)
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -1451,6 +1564,16 @@ apparatus_mode = st.radio(
 )
 positive = apparatus_mode.startswith("Positive")
 
+want_profile = st.checkbox(
+    "Add an orthographic profile to the report",
+    value=False,
+    key="wantprofile",
+    help="A table at the end of the report counting, per witness, the "
+    "features normalised before comparison — stacked consonants, head marks, "
+    "pipes written for shad, explicit spaces, shad. They describe the "
+    "witnesses rather than the text, and are otherwise invisible.",
+)
+
 ignore_shad = st.checkbox(
     "Ignore shad (།) differences",
     value=True,
@@ -1464,11 +1587,13 @@ ignore_shad = st.checkbox(
 # come from session_state because the checkboxes live inside the expander and
 # so have not been drawn yet at this point; before the first interaction
 # session_state is empty and the defaults (all on) stand.
-_PREP_KEYS = ("prep_tags", "prep_keep", "prep_us", "prep_pipe", "prep_head")
+_PREP_KEYS = ("prep_tags", "prep_keep", "prep_us", "prep_pipe", "prep_head",
+              "prep_stack")
 _prep_on = sum(bool(st.session_state.get(k, True)) for k in _PREP_KEYS)
 
 with st.expander(
-    f"Reading the files — folio tags, _, |, head marks   ·   {_prep_on} of 5 on",
+    f"Reading the files — folio tags, _, |, +, head marks   ·   "
+    f"{_prep_on} of {len(_PREP_KEYS)} on",
     expanded=False,
 ):
     st.caption(
@@ -1508,6 +1633,17 @@ with st.expander(
         key="prep_pipe",
         help="Some OCR output writes the shad as a pipe. With this on, | "
         "behaves exactly like / — ignored or reported together with shad.",
+    )
+    prep_stack = st.checkbox(
+        "Treat + as a stacking mark — seng+ge matches seng ge",
+        value=True,
+        key="prep_stack",
+        help="EWTS + forces a stacked consonant, so seng+ge and seng ge are "
+        "the same word written two ways — one after the Sanskrit, one the "
+        "naturalised Tibetan spelling. A graphic variant, not a textual one. "
+        "Untick to report it as a difference. Either way + is never removed "
+        "from a reading, so a real variant still prints as d+hi, and the "
+        "orthographic profile counts what this hides.",
     )
     prep_head = st.checkbox(
         "Ignore head marks @ # ! (yig-mgo ༄༅)",
@@ -1614,7 +1750,10 @@ if run_btn and ready:
         underscore_as_space=prep_underscore,
         pipe_as_shad=prep_pipe,
         ignore_head_marks=prep_head,
+        stack_mark_as_same=prep_stack,
     )
+    # counted from the texts as read, before anything is stripped out
+    profile_texts = list(texts) if want_profile else None
     # Counted before cleanup is applied, so the preview reflects the input.
     prep_preview = {nm: count_preprocessing_hits(t) for nm, t in zip(names, texts)}
 
@@ -1695,7 +1834,9 @@ if run_btn and ready:
             aligned, labels, ignore_shad=ignore_shad, positive=positive,
             markers=page_markers,
         )
-        report_buf, notes = export_collation_report(cells, labels, names)
+        report_buf, notes = export_collation_report(
+            cells, labels, names, profile_texts=profile_texts
+        )
 
     footnote_buf = None
     try:
