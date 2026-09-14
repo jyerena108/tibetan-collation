@@ -1464,7 +1464,7 @@ ignore_shad = st.checkbox(
 apparatus_mode = st.radio(
     "Apparatus type",
     options=["Negative (only variants)", "Positive (all witnesses)"],
-    index=1,
+    index=0,
     help="Negative apparatus lists only the witnesses that differ from the "
     "base/golden reading. Positive apparatus lists every comparison witness "
     "at each variant point, including those that agree with the lemma.",
@@ -1541,22 +1541,18 @@ if run_btn and ready:
                 "and re-save the file as UTF-8 to remove any doubt."
             )
 
-    # The archive copy exists for the report round trip: having corrected the
-    # witnesses inside a report, you want them back as standalone texts. When
-    # the witnesses came from files or links you already hold the originals,
-    # so there is nothing to archive. Made before any preprocessing, so it
-    # holds each witness exactly as it stands, pagination included.
-    versions_buf = None
-    if use_report:
-        versions_buf = export_versions_document(
-            list(texts),
-            labels,
-            patterns=[
-                (pattern_from_example(_ex) if _ex else DEFAULT_PAGE_MARKER_RE)
-                if _ex is not None else None
-                for _ex in (page_examples + [None] * len(labels))[: len(labels)]
-            ],
-        )
+    # The archive copy is made before any preprocessing: it should hold each
+    # witness exactly as it stands, pagination included, which is the whole
+    # point of keeping it.
+    versions_buf = export_versions_document(
+        list(texts),
+        labels,
+        patterns=[
+            (pattern_from_example(_ex) if _ex else DEFAULT_PAGE_MARKER_RE)
+            if _ex is not None else None
+            for _ex in (page_examples + [None] * len(labels))[: len(labels)]
+        ],
+    )
 
     # Apply the user's preprocessing choices
     apply_preprocessing_options(
@@ -1659,9 +1655,7 @@ if run_btn and ready:
         )
 
     # Store results in session_state so downloads persist after button clicks
-    st.session_state["versions_buf"] = (
-        versions_buf.getvalue() if versions_buf else None
-    )
+    st.session_state["versions_buf"] = versions_buf.getvalue()
     st.session_state["report_buf"] = report_buf.getvalue()
     st.session_state["footnote_buf"] = footnote_buf.getvalue() if footnote_buf else None
     st.session_state["note_count"] = len(notes)
@@ -1675,10 +1669,7 @@ if "report_buf" in st.session_state:
     _DOCX_MIME = (
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
-    _has_versions = bool(st.session_state.get("versions_buf"))
-    _cols_dl = st.columns(3 if _has_versions else 2)
-    dl1, dl2 = _cols_dl[0], _cols_dl[1]
-    dl3 = _cols_dl[2] if _has_versions else None
+    dl1, dl2, dl3 = st.columns(3)
     with dl1:
         st.download_button(
             label="⬇ Collation report (.docx)",
@@ -1698,18 +1689,16 @@ if "report_buf" in st.session_state:
             )
         else:
             st.button("⬇ Golden text + footnotes (.docx)", disabled=True)
-    if dl3 is not None:
-        with dl3:
-            st.download_button(
-                label="⬇ All versions, one after another (.docx)",
-                data=st.session_state["versions_buf"],
-                file_name="collated_versions.docx",
-                mime=_DOCX_MIME,
-                key="dl_versions",
-                help="Each witness in full, in sequence, with its page "
-                "markers and nothing else — the corrected texts, ready to "
-                "keep.",
-            )
+    with dl3:
+        st.download_button(
+            label="⬇ All versions, one after another (.docx)",
+            data=st.session_state["versions_buf"],
+            file_name="collated_versions.docx",
+            mime=_DOCX_MIME,
+            key="dl_versions",
+            help="Each witness in full, in sequence, with its page markers "
+            "and nothing else — for keeping the revised texts.",
+        )
 
 st.divider()
 REPO_URL = "https://github.com/jyerena108/tibetan-collation"
