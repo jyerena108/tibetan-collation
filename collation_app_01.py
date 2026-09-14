@@ -1541,18 +1541,23 @@ if run_btn and ready:
                 "and re-save the file as UTF-8 to remove any doubt."
             )
 
-    # The archive copy is made before any preprocessing: it should hold each
-    # witness exactly as it stands, pagination included, which is the whole
-    # point of keeping it.
-    versions_buf = export_versions_document(
-        list(texts),
-        labels,
-        patterns=[
-            (pattern_from_example(_ex) if _ex else DEFAULT_PAGE_MARKER_RE)
-            if _ex is not None else None
-            for _ex in (page_examples + [None] * len(labels))[: len(labels)]
-        ],
-    )
+    # The archive belongs to the report round trip: having corrected the
+    # witnesses inside a report, you need them back as standalone texts. When
+    # they came from files or links the originals are already in hand, so
+    # offering it there only invites the question of what it is for. Built
+    # before any preprocessing, so it holds each witness exactly as it
+    # stands, pagination included.
+    versions_buf = None
+    if use_report:
+        versions_buf = export_versions_document(
+            list(texts),
+            labels,
+            patterns=[
+                (pattern_from_example(_ex) if _ex else DEFAULT_PAGE_MARKER_RE)
+                if _ex is not None else None
+                for _ex in (page_examples + [None] * len(labels))[: len(labels)]
+            ],
+        )
 
     # Apply the user's preprocessing choices
     apply_preprocessing_options(
@@ -1655,7 +1660,9 @@ if run_btn and ready:
         )
 
     # Store results in session_state so downloads persist after button clicks
-    st.session_state["versions_buf"] = versions_buf.getvalue()
+    st.session_state["versions_buf"] = (
+        versions_buf.getvalue() if versions_buf else None
+    )
     st.session_state["report_buf"] = report_buf.getvalue()
     st.session_state["footnote_buf"] = footnote_buf.getvalue() if footnote_buf else None
     st.session_state["note_count"] = len(notes)
@@ -1669,7 +1676,10 @@ if "report_buf" in st.session_state:
     _DOCX_MIME = (
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
-    dl1, dl2, dl3 = st.columns(3)
+    _has_versions = bool(st.session_state.get("versions_buf"))
+    _dl = st.columns(3 if _has_versions else 2)
+    dl1, dl2 = _dl[0], _dl[1]
+    dl3 = _dl[2] if _has_versions else None
     with dl1:
         st.download_button(
             label="⬇ Collation report (.docx)",
@@ -1689,16 +1699,18 @@ if "report_buf" in st.session_state:
             )
         else:
             st.button("⬇ Golden text + footnotes (.docx)", disabled=True)
-    with dl3:
-        st.download_button(
-            label="⬇ All versions, one after another (.docx)",
-            data=st.session_state["versions_buf"],
-            file_name="collated_versions.docx",
-            mime=_DOCX_MIME,
-            key="dl_versions",
-            help="Each witness in full, in sequence, with its page markers "
-            "and nothing else — for keeping the revised texts.",
-        )
+    if dl3 is not None:
+        with dl3:
+            st.download_button(
+                label="⬇ All versions, one after another (.docx)",
+                data=st.session_state["versions_buf"],
+                file_name="collated_versions.docx",
+                mime=_DOCX_MIME,
+                key="dl_versions",
+                help="Each witness in full, in sequence, with its page "
+                "markers and nothing else — the corrected texts, ready to "
+                "keep.",
+            )
 
 st.divider()
 REPO_URL = "https://github.com/jyerena108/tibetan-collation"
