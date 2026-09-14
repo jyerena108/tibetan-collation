@@ -110,6 +110,94 @@ def count_preprocessing_hits(text: str) -> dict:
     }
 
 
+# ── Reading a collation report back in ─────────────────────────────
+# The report carries everything needed to start again: a column per witness
+# with its full text, the sigla in the header row, and the base marked
+# "(golden, notes)". That makes it an editable carrier for all the witnesses
+# at once — correct the OCR in the columns, feed the report back, re-collate.
+#
+# Page markers and note references are identified by shape, not by the italic
+# and superscript formatting the report gives them. Formatting is the first
+# thing to smear when a long table is edited by hand in Word, whereas
+# "[BX1.2r.1]" (brackets around something containing a dot) and "[7]"
+# (brackets around digits alone) survive any amount of retyping. A superscript
+# run is only dropped when it really does look like a note reference, so text
+# typed next to one cannot disappear silently.
+_NOTE_REF_RE = re.compile(r"^\[\d+\]$")
+_DOCX_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def _docx_runs(node):
+    """Yield (text, is_superscript) for every run under ``node``, in order."""
+    W = _DOCX_NS
+    for run in node.iter(W + "r"):
+        parts = []
+        for child in run:
+            if child.tag == W + "t":
+                parts.append(child.text or "")
+            elif child.tag == W + "br":
+                parts.append("\n")
+        text = "".join(parts)
+        if not text:
+            continue
+        rpr = run.find(W + "rPr")
+        sup = rpr is not None and rpr.find(W + "vertAlign") is not None
+        yield text, sup
+
+
+def parse_collation_report(raw: bytes):
+    """Recover the witnesses from a collation report produced by this tool.
+
+    Returns ``(labels, texts)``, base first. Raises ValueError with a message
+    for the user when the file is not a report this tool wrote.
+    """
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    W = _DOCX_NS
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as z:
+            doc = ET.fromstring(z.read("word/document.xml"))
+    except Exception:
+        raise ValueError(
+            "that is not a readable .docx file. Upload a collation report "
+            "this tool produced."
+        )
+
+    table = doc.find(f".//{W}tbl")
+    if table is None:
+        raise ValueError(
+            "no table found — this does not look like a collation report. "
+            "The report is the side-by-side document, not the footnote one."
+        )
+    rows = table.findall(f"{W}tr")
+    if len(rows) < 2:
+        raise ValueError("the report's table has no witness row.")
+
+    header = ["".join(t.text or "" for t in tc.iter(W + "t"))
+              for tc in rows[0].findall(f"{W}tc")]
+    labels = [h.replace("(golden, notes)", "").strip() for h in header]
+    base_at = next((i for i, h in enumerate(header) if "golden" in h), 0)
+
+    texts = []
+    for tc in rows[1].findall(f"{W}tc"):
+        parts = []
+        for text, sup in _docx_runs(tc):
+            if sup and _NOTE_REF_RE.match(text.strip()):
+                continue  # the report's own [n] reference
+            if not sup and _NOTE_REF_RE.match(text.strip()):
+                continue  # same, with its formatting lost to editing
+            parts.append(text)
+        texts.append("".join(parts))
+
+    if len(texts) != len(labels) or len(texts) < 2:
+        raise ValueError("the report's header and witness columns do not match.")
+
+    # the base has to come first for everything downstream
+    order = [base_at] + [i for i in range(len(texts)) if i != base_at]
+    return [labels[i] for i in order], [texts[i] for i in order]
+
+
 # ── Google Docs ──────────────────────────────────────────────────────
 # A Google Doc can be read without any API key through its plain-text export
 # endpoint, but only when the document is shared "anyone with the link can
@@ -980,6 +1068,55 @@ def _is_shad_only(lemma: str) -> bool:
     return bool(lemma) and all(c in SHAD_CHARS or c.isspace() for c in lemma)
 
 
+def export_versions_document(texts, labels, patterns=None):
+    """Every witness in sequence, one after another, for keeping.
+
+    The report shows the witnesses side by side for comparison; this shows
+    each one whole, which is what an archived text wants to be. Page markers
+    are kept and italicised so the pagination survives; nothing is
+    highlighted and no note references appear — the apparatus lives in the
+    other two documents.
+    """
+    doc = Document()
+    doc.add_heading("Collated versions", level=1)
+    doc.add_paragraph(
+        "Each witness in full, in the order collated. "
+        + ", ".join(labels)
+    )
+
+    # each witness may mark its pages its own way, so each gets its own
+    compiled = []
+    for i in range(len(texts)):
+        pat = patterns[i] if patterns and i < len(patterns) else None
+        try:
+            compiled.append(re.compile(pat) if pat else None)
+        except re.error:
+            compiled.append(None)
+
+    for idx, (label, text) in enumerate(zip(labels, texts)):
+        rx = compiled[idx]
+        doc.add_paragraph()
+        doc.add_heading(label, level=2)
+        para = doc.add_paragraph()
+        if rx is None:
+            para.add_run(text)
+            continue
+        pos = 0
+        for m in rx.finditer(text):
+            if m.start() > pos:
+                para.add_run(text[pos:m.start()])
+            mark = para.add_run(m.group(0))
+            mark.italic = True
+            pos = m.end()
+        if pos < len(text):
+            para.add_run(text[pos:])
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
+
 def export_golden_with_footnotes(cells, notes, labels, name1="base", milestones=None):
     """Golden text with variant footnotes.
 
@@ -1130,7 +1267,7 @@ st.subheader("1 · Upload texts")
 
 source_mode = st.radio(
     "Source",
-    options=["Upload .txt files", "Google Doc links"],
+    options=["Upload .txt files", "Google Doc links", "Upload a collation report"],
     index=0,
     horizontal=True,
     help="A Google Doc must be shared “Anyone with the link → Viewer”: the "
@@ -1139,113 +1276,137 @@ source_mode = st.radio(
     "?tab=… part selects the one you are looking at.",
 )
 use_links = source_mode.startswith("Google")
+use_report = source_mode.startswith("Upload a collation")
 
-col_a, col_b = st.columns([1, 1])
-with col_a:
-    base_link = ""
-    base_file = None
-    if use_links:
-        base_link = st.text_input(
-            "Base / golden text — Google Doc link",
-            key="lnk0",
-            placeholder="https://docs.google.com/document/d/…/edit?tab=t.…",
-        )
-    else:
-        base_file = st.file_uploader(
-            "Base / golden text (.txt)",
-            type=["txt"],
-            help="This is the primary version — all notes are anchored here.",
-        )
-    label1 = st.text_input("Label for base text", value="V1")
-    # A file's page markers are taken out before collation — left in, they
-    # align as readings — and woven back into the golden document at the
-    # points where this witness turns its page.
-    page_examples = [None]
+def _page_marker_controls(slot, who):
+    """The page-marker question for one witness, used by every source mode."""
+    example = None
     if st.checkbox(
         "This text has page markers",
         value=False,
-        key="pghas0",
-        help="Tick this if the file marks its pages, e.g. [V1.1v.1] or "
-        "[V1.272]. They are removed before collation and shown in the "
-        "golden document where each page begins.",
+        key=f"pghas{slot}",
+        help="Tick this if the text marks its pages, e.g. [V1.1v.1] or "
+        "[V1.272]. They are removed before collation, shown in the golden "
+        "document where each page begins, and kept in each column of the "
+        "report.",
     ):
-        page_examples[0] = ""
-        page_examples[0] = st.text_input(
+        example = st.text_input(
             "First page marker, exactly as it appears",
             value="",
-            key="pgx0",
-            placeholder="p.292",
-            help="Paste the first marker from this file — e.g. p.292 or "
-            "kha, 1r.1 (pdf 47). The pattern is worked out from it and the "
-            "rest are found automatically, including changes of case, "
-            "volume and recto/verso.",
+            key=f"pgx{slot}",
+            placeholder="[V1.1v.1]",
+            help="Leave blank for the usual bracketed style. Otherwise paste "
+            "the first marker from this text and the pattern is worked out "
+            "from it.",
         )
+    return example
 
-with col_b:
-    n_comp = int(
-        st.number_input(
-            "Number of comparison texts",
-            min_value=1,
-            max_value=5,
-            value=2,
-            step=1,
-            help="Up to five witnesses can be collated against the base.",
-        )
+
+report_labels, report_texts = [], []
+base_file = None
+base_link = ""
+comp_files, comp_links, comp_labels = [], [], []
+page_examples = []
+
+if use_report:
+    report_file = st.file_uploader(
+        "Collation report (.docx)",
+        type=["docx"],
+        key="repfile",
+        help="A report this tool produced. Its columns are read back as the "
+        "witnesses — correct the OCR in them and the collation is redone "
+        "from your corrections.",
     )
+    if report_file is not None:
+        try:
+            report_labels, report_texts = parse_collation_report(
+                report_file.getvalue()
+            )
+            st.success(
+                f"Read **{len(report_labels)}** witnesses — "
+                + ", ".join(report_labels)
+                + f" · base **{report_labels[0]}**"
+            )
+        except ValueError as _exc:
+            st.error(str(_exc))
+            report_labels, report_texts = [], []
 
-st.divider()
-st.subheader("2 · Comparison text(s)")
-
-# Laid out three to a row so five uploaders stay readable.
-comp_files = []
-comp_links = []
-comp_labels = []
-_cols = st.columns(min(n_comp, 3))
-for _i in range(n_comp):
-    with _cols[_i % len(_cols)]:
+    if report_labels:
+        label1 = report_labels[0]
+        comp_labels = list(report_labels[1:])
+        n_comp = len(comp_labels)
+        st.divider()
+        st.subheader("2 · Page markers")
+        _cols = st.columns(min(len(report_labels), 3))
+        for _i, _lb in enumerate(report_labels):
+            with _cols[_i % len(_cols)]:
+                st.markdown(f"**{_lb}**" + (" · base" if _i == 0 else ""))
+                page_examples.append(_page_marker_controls(_i, _lb))
+    else:
+        label1 = "V1"
+        n_comp = 0
+else:
+    col_a, col_b = st.columns([1, 1])
+    with col_a:
         if use_links:
-            comp_files.append(None)
-            comp_links.append(
-                st.text_input(
-                    f"Comparison text {_i + 1} — Google Doc link",
-                    key=f"lnk{_i + 1}",
-                    placeholder="https://docs.google.com/document/d/…/edit?tab=t.…",
-                )
+            base_link = st.text_input(
+                "Base / golden text — Google Doc link",
+                key="lnk0",
+                placeholder="https://docs.google.com/document/d/…/edit?tab=t.…",
             )
         else:
-            comp_links.append("")
-            comp_files.append(
-                st.file_uploader(
-                    f"Comparison text {_i + 1} (.txt)", type=["txt"], key=f"c{_i + 1}"
-                )
+            base_file = st.file_uploader(
+                "Base / golden text (.txt)",
+                type=["txt"],
+                help="This is the primary version — all notes are anchored here.",
             )
-        comp_labels.append(
-            st.text_input(
-                f"Label for comparison {_i + 1}",
-                value=f"V{_i + 2}",
-                key=f"lab{_i + 1}",
+        label1 = st.text_input("Label for base text", value="V1")
+        page_examples.append(_page_marker_controls(0, label1))
+
+    with col_b:
+        n_comp = int(
+            st.number_input(
+                "Number of comparison texts",
+                min_value=1,
+                max_value=5,
+                value=2,
+                step=1,
+                help="Up to five witnesses can be collated against the base.",
             )
         )
-        _ex = None
-        if st.checkbox(
-            "This text has page markers",
-            value=False,
-            key=f"pghas{_i + 1}",
-            help="Tick this if the file marks its pages, e.g. [V2.145r.1] "
-            "or [V2.272]. They are removed before collation and shown in "
-            "the golden document where each page begins.",
-        ):
-            _ex = ""
-            _ex = st.text_input(
-                "First page marker, exactly as it appears",
-                value="",
-                key=f"pgx{_i + 1}",
-                placeholder="Pdf.50",
-                help="Paste the first marker from this file. The pattern is "
-                "worked out from it and the rest are found automatically, "
-                "including changes of case, volume and recto/verso.",
+
+    st.divider()
+    st.subheader("2 · Comparison text(s)")
+
+    # Laid out three to a row so five uploaders stay readable.
+    _cols = st.columns(min(n_comp, 3))
+    for _i in range(n_comp):
+        with _cols[_i % len(_cols)]:
+            if use_links:
+                comp_files.append(None)
+                comp_links.append(
+                    st.text_input(
+                        f"Comparison text {_i + 1} — Google Doc link",
+                        key=f"lnk{_i + 1}",
+                        placeholder="https://docs.google.com/document/d/…/edit?tab=t.…",
+                    )
+                )
+            else:
+                comp_links.append("")
+                comp_files.append(
+                    st.file_uploader(
+                        f"Comparison text {_i + 1} (.txt)", type=["txt"],
+                        key=f"c{_i + 1}",
+                    )
+                )
+            comp_labels.append(
+                st.text_input(
+                    f"Label for comparison {_i + 1}",
+                    value=f"V{_i + 2}",
+                    key=f"lab{_i + 1}",
+                )
             )
-        page_examples.append(_ex)
+            page_examples.append(_page_marker_controls(_i + 1, f"V{_i + 2}"))
 
 st.divider()
 st.subheader("3 · Options")
@@ -1312,13 +1473,17 @@ positive = apparatus_mode.startswith("Positive")
 
 st.subheader("4 · Run")
 
-if use_links:
+if use_report:
+    ready = bool(report_texts)
+elif use_links:
     ready = bool(base_link.strip()) and all(l.strip() for l in comp_links)
 else:
     ready = base_file is not None and all(f is not None for f in comp_files)
 
 if not ready:
     st.info(
+        "Upload a collation report above to enable the collation."
+        if use_report else
         "Paste a link for every text above to enable the collation."
         if use_links else
         "Upload all required files above to enable the collation."
@@ -1338,7 +1503,10 @@ if run_btn and ready:
     texts, encodings, names = [], [], []
     _fetched = []
     for _i in range(len(labels)):
-        if use_links:
+        if use_report:
+            # already read out of the report when it was uploaded
+            _t, _e, _name = report_texts[_i], "UTF-8", labels[_i]
+        elif use_links:
             with st.spinner(f"Fetching {labels[_i]} from Google Docs…"):
                 try:
                     _raw, _name = fetch_google_doc(links[_i])
@@ -1372,6 +1540,19 @@ if run_btn and ready:
                 "collation will run; check the output for odd characters, "
                 "and re-save the file as UTF-8 to remove any doubt."
             )
+
+    # The archive copy is made before any preprocessing: it should hold each
+    # witness exactly as it stands, pagination included, which is the whole
+    # point of keeping it.
+    versions_buf = export_versions_document(
+        list(texts),
+        labels,
+        patterns=[
+            (pattern_from_example(_ex) if _ex else DEFAULT_PAGE_MARKER_RE)
+            if _ex is not None else None
+            for _ex in (page_examples + [None] * len(labels))[: len(labels)]
+        ],
+    )
 
     # Apply the user's preprocessing choices
     apply_preprocessing_options(
@@ -1474,6 +1655,7 @@ if run_btn and ready:
         )
 
     # Store results in session_state so downloads persist after button clicks
+    st.session_state["versions_buf"] = versions_buf.getvalue()
     st.session_state["report_buf"] = report_buf.getvalue()
     st.session_state["footnote_buf"] = footnote_buf.getvalue() if footnote_buf else None
     st.session_state["note_count"] = len(notes)
@@ -1484,13 +1666,16 @@ if "report_buf" in st.session_state:
     st.divider()
     st.subheader("5 · Download outputs")
 
-    dl1, dl2 = st.columns(2)
+    _DOCX_MIME = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    dl1, dl2, dl3 = st.columns(3)
     with dl1:
         st.download_button(
             label="⬇ Collation report (.docx)",
             data=st.session_state["report_buf"],
             file_name="collation_report.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            mime=_DOCX_MIME,
             key="dl_report",
         )
     with dl2:
@@ -1499,11 +1684,21 @@ if "report_buf" in st.session_state:
                 label="⬇ Golden text + footnotes (.docx)",
                 data=st.session_state["footnote_buf"],
                 file_name="collation_footnotes.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                mime=_DOCX_MIME,
                 key="dl_footnotes",
             )
         else:
             st.button("⬇ Golden text + footnotes (.docx)", disabled=True)
+    with dl3:
+        st.download_button(
+            label="⬇ All versions, one after another (.docx)",
+            data=st.session_state["versions_buf"],
+            file_name="collated_versions.docx",
+            mime=_DOCX_MIME,
+            key="dl_versions",
+            help="Each witness in full, in sequence, with its page markers "
+            "and nothing else — for keeping the revised texts.",
+        )
 
 st.divider()
 REPO_URL = "https://github.com/jyerena108/tibetan-collation"
