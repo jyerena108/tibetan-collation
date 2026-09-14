@@ -632,8 +632,27 @@ def _reattach_stranded_achung(*rows):
     return rows
 
 
+def _drop_empty_columns(rows):
+    """Remove columns where every witness is blank.
+
+    The aligner leaves these behind. They contribute nothing to any output,
+    but they fall between a syllable and its suffix often enough to hide from
+    the merge below that the two belong together.
+    """
+    if not rows:
+        return rows
+    width = max(len(r) for r in rows)
+    for r in rows:
+        r.extend([""] * (width - len(r)))
+    for j in range(width - 1, -1, -1):
+        if all(r[j] == "" for r in rows):
+            for r in rows:
+                del r[j]
+    return rows
+
+
 def _merge_final_achung(rows):
-    """Rejoin a final a-chung the aligner left standing in its own cell.
+    """Rejoin a Tibetan syllable the aligner cut at an apostrophe.
 
     ``mda'`` and ``bka'`` come back as two cells, the word and then a cell
     holding nothing but the apostrophe, so a note reports ``mnga`` against
@@ -661,18 +680,43 @@ def _merge_final_achung(rows):
         here = [r[j] for r in rows]
         prev = [r[j - 1] for r in rows]
         gap = any(c == "-" for c in here) or any(p == "-" for p in prev)
-        lone = any(c.strip() for c in here) and all(
-            (not c.strip())
-            or all(ch in A_CHUNG_CHARS or ch.isspace() for ch in c)
+        # The tokenizer breaks at every apostrophe, so pa'i arrives as pa +
+        # 'i and mnga' as mnga + ' . Each is one Tibetan syllable — a stem
+        # with its suffix inside a single tsheg unit — so a cell opening with
+        # an apostrophe continues the one before it.
+        opens_achung = any(c.strip() for c in here) and all(
+            (not c.strip()) or c.lstrip()[:1] in A_CHUNG_CHARS
             for c in here
         )
-        backward = any(
-            p
-            and p[-1] not in _SEP_CHARS
-            and p[-1] not in SHAD_CHARS
-            and p[-1] not in A_CHUNG_CHARS
-            for p in prev
+        # …and the mirror: a cell ending in an apostrophe with the next
+        # starting on a letter, which is how pa'ang is cut.
+        closes_achung = any(
+            p.rstrip()[-1:] in A_CHUNG_CHARS and p == p.rstrip()
+            for p in prev if p.strip()
+        ) and all(
+            (not c.strip()) or c.lstrip()[:1] not in _SEP_CHARS
+            for c in here
         )
+        lone = opens_achung or closes_achung
+        # The base arbitrates, because the marker is placed in the base's
+        # text: if the base writes the two as one syllable the marker must not
+        # split it, whatever the other witnesses do — GX1 writes "pa 'ang"
+        # where the base has "pa'ang". Where the base has a gap there is
+        # nothing to judge by, so every witness must agree instead.
+        #
+        # It matters that this reads the base rather than any witness. An
+        # earlier version merged whenever *any* witness ran two cells
+        # together, which joined "mi" and "'am" — a word and its particle,
+        # not a stem and its suffix — and swallowed a transposition into one
+        # unreadable note.
+        def runs_on(p):
+            return bool(p) and p[-1] not in _SEP_CHARS and p[-1] not in SHAD_CHARS
+
+        if prev and prev[0].strip():
+            backward = runs_on(prev[0])
+        else:
+            joined = [p for p in prev if p.strip()]
+            backward = bool(joined) and all(runs_on(p) for p in joined)
         if lone and backward and not gap:
             for r in rows:
                 r[j - 1] = r[j - 1] + r[j]
@@ -733,6 +777,7 @@ def align_witnesses(texts):
 
     aligned = [token_row_to_text_row(row_matrix[i], t) for i, t in enumerate(texts)]
     _reattach_stranded_achung(*aligned)
+    _drop_empty_columns(aligned)
     _merge_final_achung(aligned)
     _merge_split_stacks(aligned)
     return aligned
@@ -843,16 +888,23 @@ def _trim_common_syllables(readings):
     if len(readings) < 2:
         return readings, 0
 
+    # Shared syllables are recognised by comparison key rather than by how
+    # they print: "d+hi" and "dhi" are the same reading once the stacking mark
+    # is neutral, and comparing the printed form would keep them, leaving a
+    # note that cites shared syllables to report a one-word variant.
+    def same(a, b):
+        return strip_ignorable(a) == strip_ignorable(b)
+
     # common prefix
     n = min(len(r) for r in readings)
     pre = 0
-    while pre < n and all(r[pre] == readings[0][pre] for r in readings):
+    while pre < n and all(same(r[pre], readings[0][pre]) for r in readings):
         pre += 1
     readings = [r[pre:] for r in readings]
     # common suffix
     n = min(len(r) for r in readings)
     suf = 0
-    while suf < n and all(r[-1 - suf] == readings[0][-1 - suf] for r in readings):
+    while suf < n and all(same(r[-1 - suf], readings[0][-1 - suf]) for r in readings):
         suf += 1
     if suf:
         readings = [r[: len(r) - suf] for r in readings]
