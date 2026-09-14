@@ -1251,13 +1251,7 @@ st.set_page_config(
     layout="centered",
 )
 
-# Streamlit markdown has no underline directive (bold/italics/strikethrough
-# and colour only) and st.title() takes no unsafe_allow_html, so the title is
-# rendered as an explicit <h1>. Only the wording is underlined, not the emoji.
-st.markdown(
-    "<h1>📜 <u>Tibetan Collation Tool</u></h1>",
-    unsafe_allow_html=True,
-)
+st.title("📜 Tibetan Collation Tool")
 st.caption("Upload your texts, run the collation, and download the Word outputs.")
 
 st.divider()
@@ -1291,7 +1285,7 @@ def _page_marker_controls(slot, who):
         "report.",
     ):
         example = st.text_input(
-            "First page marker, exactly as it appears",
+            "Optional: add example of first page marker",
             value="",
             key=f"pgx{slot}",
             placeholder="[V1.1v.1]",
