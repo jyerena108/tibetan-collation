@@ -28,7 +28,7 @@ from pathlib import Path
 import streamlit as st
 from docx import Document
 from docx.shared import Inches, Mm, Pt
-from docx.enum.text import WD_LINE_SPACING
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.enum.section import WD_ORIENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -1207,9 +1207,79 @@ def orthographic_profile(texts, labels):
     return rows, stacked
 
 
-def add_orthographic_profile(doc, texts, labels):
-    """Append the profile to the report."""
-    rows, stacked = orthographic_profile(texts, labels)
+PROFILE_TABLE_STYLE = "Light Grid Accent 1"
+
+
+def _style_table(table, numeric_from=1):
+    """Give a table borders, a bold header, and right-aligned figures."""
+    try:
+        table.style = PROFILE_TABLE_STYLE
+    except KeyError:  # a template without the built-in styles
+        try:
+            table.style = "Table Grid"
+        except KeyError:
+            pass
+    table.autofit = True
+    for cell in table.rows[0].cells:
+        for para in cell.paragraphs:
+            for run in para.runs:
+                run.bold = True
+    for row in table.rows[1:]:
+        for cell in row.cells[numeric_from:]:
+            text = cell.text.strip()
+            if text and all(ch.isdigit() for ch in text):
+                for para in cell.paragraphs:
+                    para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+
+
+def _trim_shared_for_display(readings):
+    """Trim syllables shared by every witness, comparing what is printed.
+
+    The apparatus trims by comparison key, where "seng ge'i" and "seng+ge'i"
+    count as the same and would vanish. Here the stacking *is* the subject, so
+    the printed form decides.
+    """
+    lists = [list(r) for r in readings]
+    n = min(len(r) for r in lists)
+    pre = 0
+    while pre < n and all(r[pre] == lists[0][pre] for r in lists):
+        pre += 1
+    lists = [r[pre:] for r in lists]
+    n = min(len(r) for r in lists)
+    suf = 0
+    while suf < n and all(r[-1 - suf] == lists[0][-1 - suf] for r in lists):
+        suf += 1
+    if suf:
+        lists = [r[: len(r) - suf] for r in lists]
+    return lists
+
+
+def stacked_form_rows(cells, ignore_shad=True):
+    """Every point where some witness stacks, and what each witness reads.
+
+    Answers the question the bare list of forms could not: BX1 writes d+hi —
+    what do the others have there? Readings are trimmed to the differing part,
+    and identical patterns are counted rather than repeated.
+    """
+    counts = {}
+    order = []
+    for cell in cells:
+        if not any("+" in seg for seg in cell.segs):
+            continue
+        trimmed = _trim_shared_for_display(
+            [_syllables(seg, ignore_shad) for seg in cell.segs]
+        )
+        reading = tuple(" ".join(t) or OMITTED_MARK for t in trimmed)
+        if reading not in counts:
+            order.append(reading)
+        counts[reading] = counts.get(reading, 0) + 1
+    order.sort(key=lambda r: (-counts[r], r))
+    return [(r, counts[r]) for r in order]
+
+
+def add_orthographic_profile(doc, texts, labels, cells=None):
+    """Append the profile, and the stacked-form comparison, to the report."""
+    rows, _stacked = orthographic_profile(texts, labels)
     doc.add_paragraph()
     doc.add_heading("Orthographic profile", level=2)
     doc.add_paragraph(
@@ -1218,24 +1288,38 @@ def add_orthographic_profile(doc, texts, labels):
     )
     table = doc.add_table(rows=1, cols=len(labels) + 1)
     hdr = table.rows[0].cells
-    hdr[0].text = ""
+    hdr[0].paragraphs[0].add_run("")
     for i, label in enumerate(labels):
-        hdr[i + 1].text = label
+        hdr[i + 1].paragraphs[0].add_run(label)
     for name, counts in rows:
-        cells = table.add_row().cells
-        cells[0].text = name
+        cs = table.add_row().cells
+        cs[0].paragraphs[0].add_run(name)
         for i, n in enumerate(counts):
-            cells[i + 1].text = str(n)
+            cs[i + 1].paragraphs[0].add_run(str(n))
+    _style_table(table)
 
-    if any(stacked.values()):
-        doc.add_paragraph()
-        doc.add_paragraph("Stacked forms, by witness:")
-        for label in labels:
-            forms = stacked.get(label) or []
-            p = doc.add_paragraph()
-            run = p.add_run(f"{label}  ")
-            run.bold = True
-            p.add_run(", ".join(forms) if forms else "—")
+    stacked_rows = stacked_form_rows(cells) if cells else []
+    if not stacked_rows:
+        return
+
+    doc.add_paragraph()
+    doc.add_heading("Stacked forms across the witnesses", level=2)
+    doc.add_paragraph(
+        "Each point where a witness writes a stacked consonant, and what the "
+        "others read there. Identical patterns are counted, not repeated. "
+        "A longer row means the stacked word sits beside another variant."
+    )
+    st_table = doc.add_table(rows=1, cols=len(labels) + 1)
+    hdr = st_table.rows[0].cells
+    for i, label in enumerate(labels):
+        hdr[i].paragraphs[0].add_run(label)
+    hdr[len(labels)].paragraphs[0].add_run("times")
+    for reading, n in stacked_rows:
+        cs = st_table.add_row().cells
+        for i, text in enumerate(reading):
+            cs[i].paragraphs[0].add_run(text)
+        cs[len(labels)].paragraphs[0].add_run(str(n))
+    _style_table(st_table, numeric_from=len(labels))
 
 
 def export_collation_report(cells, labels, names, profile_texts=None):
@@ -1314,7 +1398,7 @@ def export_collation_report(cells, labels, names, profile_texts=None):
             p.add_run(text)
 
     if profile_texts:
-        add_orthographic_profile(doc, profile_texts, labels)
+        add_orthographic_profile(doc, profile_texts, labels, cells=cells)
 
     buf = io.BytesIO()
     doc.save(buf)
