@@ -1508,7 +1508,7 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
         char_pos = end_pos
 
     doc = Document()
-    doc.add_heading(f"{labels[0]} with Footnotes", level=1)
+    doc.add_heading(f"{labels[0]} \u2014 golden text with footnotes", level=1)
     if len(labels) > 2:
         others = ", ".join(labels[1:-1]) + " and " + labels[-1]
     else:
@@ -2128,7 +2128,7 @@ if "report_buf" in st.session_state:
             st.download_button(
                 label="⬇ Golden text + footnotes (.docx)",
                 data=st.session_state["footnote_buf"],
-                file_name="collation_footnotes.docx",
+                file_name="golden_text_footnotes.docx",
                 mime=_DOCX_MIME,
                 key="dl_footnotes",
             )
