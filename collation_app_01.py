@@ -1428,7 +1428,7 @@ def export_versions_document(texts, labels, patterns=None):
     other two documents.
     """
     doc = Document()
-    doc.add_heading("Collated versions", level=1)
+    doc.add_heading("All source versions", level=1)
     doc.add_paragraph(
         "Each witness in full, in the order collated. "
         + ", ".join(labels)
@@ -1468,7 +1468,8 @@ def export_versions_document(texts, labels, patterns=None):
 
 
 def export_golden_with_footnotes(cells, notes, labels, name1="base",
-                                 milestones=None, ignore_shad=True):
+                                 milestones=None, ignore_shad=True,
+                                 profile_texts=None):
     """Golden text with variant footnotes.
 
     ``cells`` is the very list the report was built from, so footnote numbering
@@ -1513,7 +1514,19 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
     else:
         others = labels[1]
     doc.add_paragraph(f"Base: {name1}  |  Footnotes from comparison with {others}.")
-    doc.add_paragraph()
+
+    if profile_texts:
+        # Front matter: the profile describes the witnesses, so it belongs
+        # before the text rather than after it, and on its own page so the
+        # reading begins at the top of one.
+        #
+        # Portrait throughout, like the rest of the document — the
+        # stacked-forms table wraps within its columns rather than the page
+        # changing shape under the reader.
+        add_orthographic_profile(doc, profile_texts, labels, cells=cells)
+        doc.add_page_break()
+    else:
+        doc.add_paragraph()
 
     p_text = doc.add_paragraph()
 
@@ -2073,6 +2086,7 @@ if run_btn and ready:
             footnote_buf = export_golden_with_footnotes(
                 cells, notes, labels, name1=names[0],
                 milestones=golden_milestones, ignore_shad=ignore_shad,
+                profile_texts=profile_texts,
             )
     except AttributeError:
         st.warning(
@@ -2123,9 +2137,9 @@ if "report_buf" in st.session_state:
     if dl3 is not None:
         with dl3:
             st.download_button(
-                label="⬇ All versions, one after another (.docx)",
+                label="⬇ All source versions (.docx)",
                 data=st.session_state["versions_buf"],
-                file_name="collated_versions.docx",
+                file_name="all_source_versions.docx",
                 mime=_DOCX_MIME,
                 key="dl_versions",
                 help="Each witness in full, in sequence, with its page "

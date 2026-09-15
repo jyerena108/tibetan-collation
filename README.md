@@ -16,7 +16,7 @@ It works with both Unicode Tibetan (བོད་ཡིག) and Wylie/EWTS transl
 |---|---|
 | **Collation report** | Every witness side by side, plus the numbered notes. A3 landscape, so six columns stay readable |
 | **Golden text + footnotes** | Your base text with real Word footnotes at each variant |
-| **All versions, one after another** | Each witness in full, in sequence — offered only when the input was a collation report (see [the round trip](#the-round-trip)) |
+| **All source versions** | Each witness in full, in sequence — offered only when the input was a collation report (see [the round trip](#the-round-trip)) |
 
 Notes follow standard critical-edition style, with the siglum before the
 reading on both sides of the bracket:
