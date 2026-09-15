@@ -1184,22 +1184,86 @@ def _write_cell(para, text, marks, shade):
 # witness; both are still normalised, they are simply not evidence.
 _STACK_WORD_RE = re.compile(r"[A-Za-z']*\+[A-Za-z']*")
 
+# Unicode counterparts of the marks the Wylie counters look for. Subjoined
+# consonants (U+0F90…) are deliberately absent: they are the Unicode spelling
+# of every ordinary syllable, so counting them would answer "how much Tibetan
+# is here", not "which loans did this scriptorium stack". EWTS + records a
+# transcriber's choice; Unicode does not record that choice at all.
+_UNI_HEAD_MARKS = "༄༅༆༇༈"
+_UNI_SHAD = "།༎༏༐༑༔"
+_NB_TSHEG = "༌"
+
+WYLIE, TIBETAN = "wylie", "tibetan"
+BOTH_SCRIPTS = frozenset((WYLIE, TIBETAN))
+NOT_APPLICABLE = "–"
+
+
+def _script_of(text):
+    """Which script a witness is written in, by the same test used for notes."""
+    return TIBETAN if _TIBETAN_CHAR_RE.search(text) else WYLIE
+
+
+# Each feature carries the marks it looks for in each script, so the row can
+# be labelled in whichever script the witnesses are actually written in: a
+# Wylie run should not grow Tibetan characters in its headings, nor the
+# reverse. Order is the order the rows print in.
+#
+# ``scripts`` says where the feature can exist at all. A feature absent from
+# every witness's script is not listed; one absent from a single witness's
+# script shows NOT_APPLICABLE for that column, because a zero there would
+# claim the text was searched and found wanting.
 ORTHOGRAPHIC_FEATURES = (
-    ("Stacked consonants  +", lambda t: len(re.findall(r"[A-Za-z']\+[A-Za-z']", t))),
-    ("Head marks  @ # !", lambda t: sum(t.count(c) for c in "@#!")),
-    ("Pipe written for shad  |", lambda t: t.count("|")),
-    ("Explicit space  _", lambda t: t.count("_")),
-    ("Shad  /", lambda t: t.count("/")),
+    ("Stacked consonants", "+", None, frozenset((WYLIE,)),
+     lambda t: len(re.findall(r"[A-Za-z']\+[A-Za-z']", t))),
+    ("Head marks", "@ # !", "༄༅", BOTH_SCRIPTS,
+     lambda t: sum(t.count(c) for c in "@#!")
+     + sum(t.count(c) for c in _UNI_HEAD_MARKS)),
+    ("Pipe written for shad", "|", "|", BOTH_SCRIPTS, lambda t: t.count("|")),
+    ("Explicit space", "_", None, frozenset((WYLIE,)), lambda t: t.count("_")),
+    ("Shad", "/", "།", BOTH_SCRIPTS,
+     lambda t: t.count("/") + sum(t.count(c) for c in _UNI_SHAD)),
+    ("Non-breaking tsheg", None, "༌", frozenset((TIBETAN,)),
+     lambda t: t.count(_NB_TSHEG)),
 )
+
+
+def _feature_label(name, wylie_marks, tib_marks, present):
+    """Name the row in the script(s) the witnesses are written in."""
+    marks = []
+    if TIBETAN in present and tib_marks:
+        marks.append(tib_marks)
+    if WYLIE in present and wylie_marks and wylie_marks not in marks:
+        marks.append(wylie_marks)
+    return f"{name}  {' '.join(marks)}" if marks else name
 
 
 def orthographic_profile(texts, labels):
     """Per-witness counts of the features normalised before comparison.
 
     Returns ``(rows, stacked)`` where rows is ``[(feature, [counts…])…]`` and
-    stacked maps each label to the distinct stacked forms it uses.
+    stacked maps each label to the distinct stacked forms it uses. Counts are
+    integers, or NOT_APPLICABLE where the feature cannot occur in that
+    witness's script.
+
+    Rows and their labels follow the scripts actually present, so an all-Wylie
+    run reads exactly as it always did and an all-Unicode one is not a column
+    of zeros standing for features that were never findable.
     """
-    rows = [(name, [fn(t) for t in texts]) for name, fn in ORTHOGRAPHIC_FEATURES]
+    scripts = [_script_of(t) for t in texts]
+    present = frozenset(scripts)
+    rows = []
+    if len(present) > 1:
+        # Only worth saying when it varies; it is what the dashes below mean.
+        rows.append(("Script", ["Tibetan" if s is TIBETAN else "Wylie"
+                                for s in scripts]))
+    for name, wylie_marks, tib_marks, feat_scripts, fn in ORTHOGRAPHIC_FEATURES:
+        if not (feat_scripts & present):
+            continue
+        rows.append((
+            _feature_label(name, wylie_marks, tib_marks, present & feat_scripts),
+            [fn(t) if s in feat_scripts else NOT_APPLICABLE
+             for t, s in zip(texts, scripts)],
+        ))
     stacked = {}
     for label, text in zip(labels, texts):
         forms = sorted({m.group(0).strip("/") for m in _STACK_WORD_RE.finditer(text)})
@@ -1227,7 +1291,7 @@ def _style_table(table, numeric_from=1):
     for row in table.rows[1:]:
         for cell in row.cells[numeric_from:]:
             text = cell.text.strip()
-            if text and all(ch.isdigit() for ch in text):
+            if text and (text == NOT_APPLICABLE or all(ch.isdigit() for ch in text)):
                 for para in cell.paragraphs:
                     para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
 
@@ -1282,10 +1346,19 @@ def add_orthographic_profile(doc, texts, labels, cells=None):
     rows, _stacked = orthographic_profile(texts, labels)
     doc.add_paragraph()
     doc.add_heading("Orthographic profile", level=2)
-    doc.add_paragraph(
+    intro = (
         "Features normalised before comparison and therefore absent from the "
         "apparatus. They describe the witnesses rather than the text."
     )
+    if any(_script_of(t) is TIBETAN for t in texts):
+        # Otherwise a Tibetan-script run looks as though the stacking count
+        # failed, when in fact there is no such count to take.
+        intro += (
+            " Explicit stacking is a feature of Wylie transcription: the "
+            "EWTS + records a choice the transcriber made, which Tibetan "
+            "script does not distinguish, so it is not counted there."
+        )
+    doc.add_paragraph(intro)
     table = doc.add_table(rows=1, cols=len(labels) + 1)
     hdr = table.rows[0].cells
     hdr[0].paragraphs[0].add_run("")

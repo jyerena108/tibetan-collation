@@ -143,6 +143,22 @@ Shad  /                      317     292     286     279
 Read as a profile that says something: AB1 stacks sixteen forms where the base
 stacks three.
 
+**The table follows the script your texts are in.** Wylie witnesses are
+labelled in Wylie, exactly as above. Unicode Tibetan witnesses are labelled in
+Tibetan — `Head marks  ༄༅`, `Shad  །` — and gain a row for the non-breaking
+tsheg `༌`, which is normalised away silently otherwise. Rows that cannot exist
+in a script are not listed for it rather than reported as zero, and a run
+mixing the two marks those cells `–` and adds a **Script** row saying which
+witness is which.
+
+Explicit stacking is the one feature with no Unicode counterpart. EWTS `+`
+records a choice the transcriber made; Tibetan script does not distinguish
+stacked from unstacked, so there is nothing there to count. The subjoined
+consonants are not a substitute — they spell every ordinary syllable, so
+counting them would measure how much Tibetan is present, not how the witness
+handled its Sanskrit. A Unicode run therefore has no stacking row and no
+stacked-forms table.
+
 The second takes every stacked form and shows what the other witnesses wrote at
 that point, so you can tell a spelling habit from a real reading:
 
