@@ -1,8 +1,29 @@
-streamlit
-bayoo-docx
-diff-match-patch
-numpy
-prettytable
-pypandoc
-regex
-setuptools
+# Pinned so a rebuild installs what we tested, not whatever was released that
+# morning. Streamlit Cloud reinstalls from scratch on every rebuild, so an
+# unpinned file lets a dependency release break the deploy on a day nothing
+# here changed — and with no record of what it used to install, there is
+# nothing to compare against when it does.
+#
+# Resolved against Python 3.11 (see runtime.txt), NOT against a local machine:
+# this repo is also worked on from a Mac running 3.9, where pip picks older
+# versions, and numpy's current release needs 3.12. Refresh with the newest
+# release of each package that still accepts 3.11, then check the deployed app
+# loads before considering it done.
+#
+# Last refreshed 2026-09-14.
+
+streamlit==1.63.0
+bayoo-docx==0.2.20
+
+# Pydurma's dependencies. prettytable is imported lazily inside
+# Pydurma/src/Pydurma/utils/utils.py, so it does not show up in a search for
+# top-level imports — it is needed all the same.
+diff-match-patch==20241021
+regex==2026.9.10
+prettytable==3.18.0
+pypandoc==1.17
+
+# numpy is not imported by this code; Streamlit pulls it in regardless, so it
+# is pinned here rather than left to float.
+numpy==2.4.6
+setuptools==84.0.0
