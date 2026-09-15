@@ -1828,13 +1828,16 @@ ignore_shad = st.checkbox(
 )
 
 want_profile = st.checkbox(
-    "Add an orthographic profile to the report",
+    "Add an orthographic profile",
     value=False,
     key="wantprofile",
-    help="A table at the end of the report counting, per witness, the "
-    "features normalised before comparison — stacked consonants, head marks, "
-    "pipes written for shad, explicit spaces, shad. They describe the "
-    "witnesses rather than the text, and are otherwise invisible.",
+    help="Two tables describing the witnesses rather than the text: they open "
+    "the footnote document on a page of their own, and close the report. The "
+    "first counts, per witness, the features normalised before comparison — "
+    "stacked consonants, head marks, pipes written for shad, explicit spaces, "
+    "shad — which otherwise leave no trace. The second takes every stacked "
+    "form and shows what the other witnesses wrote at that point, so you can "
+    "tell a spelling habit from a real reading.",
 )
 
 # The expander label reports how many cleanup options are on. Their values

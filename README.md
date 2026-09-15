@@ -15,7 +15,7 @@ It works with both Unicode Tibetan (བོད་ཡིག) and Wylie/EWTS transl
 | File | Contents |
 |---|---|
 | **Collation report** | Every witness side by side, plus the numbered notes. A3 landscape, so six columns stay readable |
-| **Golden text + footnotes** | Your base text with real Word footnotes at each variant |
+| **Golden text + footnotes** | Your base text with real Word footnotes at each variant, opening with the orthographic profile when you ask for one |
 | **All source versions** | Each witness in full, in sequence — offered only when the input was a collation report (see [the round trip](#the-round-trip)) |
 
 Notes follow standard critical-edition style, with the siglum before the
@@ -116,13 +116,20 @@ sign of pagination about to be read as a variant.
   that agree with the base
 - **Negative** — lists only the witnesses that *differ*
 
+**Treat `+` as a stacking mark — `seng+ge` matches `seng ge`** — off by
+default, so the difference is reported and you can see it. Tick it to read the
+two spellings as one word. See [below](#orthography-versus-text).
+
 **Ignore shad (།) differences** — on by default. Differences consisting only of
 shad punctuation (`།`, `༎`, `༔`, and the Wylie `/`) are not reported. Turn it
 off to have them appear.
 
-**Add an orthographic profile to the report** — off by default. Appends a table
-counting, per witness, the features normalised before comparison. They describe
-the witnesses rather than the text, and are otherwise invisible:
+**Add an orthographic profile** — off by default. Two tables that describe the
+witnesses rather than the text: they open the footnote document on a page of
+their own, and close the report.
+
+The first counts the features normalised before comparison, which otherwise
+leave no trace:
 
 ```
                              BX1     AB1     DX1     GX1
@@ -131,13 +138,24 @@ Head marks  @ # !              2       1       0       0
 Pipe written for shad  |       0       0       0       7
 Explicit space  _              5       0       0       0
 Shad  /                      317     292     286     279
-
-BX1  d+hi
-AB1  kle+p, pad+ma'i, seng+ge, seng+ge'i, ut+pa
 ```
 
-Read as a profile that says something: AB1 stacks five forms where the base
-stacks one.
+Read as a profile that says something: AB1 stacks sixteen forms where the base
+stacks three.
+
+The second takes every stacked form and shows what the other witnesses wrote at
+that point, so you can tell a spelling habit from a real reading:
+
+| BX1 | AB1 | DX1 | GX1 | × |
+|---|---|---|---|---|
+| seng ge'i | **seng+ge'i** | seng ge'i | seng ge'i | 7 |
+| **d+hi** | de | de | de | 2 |
+| seng ge | **seng+ge** | seng ge | seng ge | 2 |
+| pad ma'i | **pad+ma'i** | **pad+ma'i** | **pad+ma'i** | 1 |
+
+`seng+ge` against `seng ge` is AB1 spelling the same word another way. `d+hi`
+against `de` is a different reading, and stays in the apparatus however you set
+the stacking option.
 
 **Reading the files** — collapsed, and safe to leave alone. Each option only
 takes effect if its pattern actually appears in your texts.
@@ -148,7 +166,6 @@ takes effect if its pattern actually appears in your texts.
 | ↳ keep as milestones | Puts the base text's tags back into the golden document, in italics, at their original positions — without them ever entering the collation |
 | Treat `_` as a space | EWTS writes an explicit space as `_`; without this, `pa/_bdag` and `pa/ bdag` read as different words |
 | Treat `\|` as a shad | Some OCR output writes the shad as a pipe |
-| Treat `+` as a stacking mark | `seng+ge` matches `seng ge` — see [below](#orthography-versus-text) |
 | Ignore head marks `@ # !` | These transliterate the yig-mgo ornaments (༄༅) that open a section — structural, not textual |
 
 After running, a **Preprocessing preview** reports how many of each pattern were
@@ -184,18 +201,22 @@ is the first thing to smear when a long table is edited by hand in Word.
 Some differences are graphic rather than textual, and repeating them through an
 apparatus buries the readings that matter. The tool normalises these for
 *matching* only — they are never removed from a reading, so a genuine variant
-still prints what the witness actually wrote.
+still prints what the witness actually wrote. Apostrophes are folded always;
+stacking is the option described above.
 
 - **Stacked consonants.** EWTS `+` forces a stack, so `seng+ge` and `seng ge`
   are the same word written two ways — one after the Sanskrit original, one the
-  naturalised Tibetan spelling. Ignored by default; untick the option to report
-  it. A real variant still reads `V1 d+hi] V2, V3, V4 de`.
+  naturalised Tibetan spelling. **Reported by default**, so you see the
+  difference; tick **Treat `+` as a stacking mark** in section 3 to read the two
+  as one word. Either way `+` is never removed from a reading, so a real variant
+  still reads `V1 d+hi] V2, V3, V4 de`.
 - **Typographic apostrophes.** Word processors and OCR turn the Wylie a-chung
   into a curly quote (`’` or `‘`). These fold onto the ASCII apostrophe for
   comparison *and* in the notes, so `'gyur` and `’gyur` are not reported as a
   variant and a note reads `'das`, not `‘das`.
 
-Everything ignored this way is what the orthographic profile counts.
+The orthographic profile counts both features, whether or not they are
+being ignored on a given run.
 
 ---
 
