@@ -232,13 +232,29 @@ def strip_gdoc_footnotes(text: str) -> str:
     return text[: m.start()] if m else text
 
 
-def fetch_google_doc(url: str, timeout: int = 30):
-    """Fetch a Google Doc (or one of its tabs) as plain text.
+# What each export format must come back as. A private document answers with
+# a sign-in page carrying HTTP 200, so the content type is the only thing that
+# tells a refusal from a document — and handing that HTML to the .docx parser
+# would report a corrupt file instead of a sharing problem.
+_GDOC_FORMATS = {
+    "txt": ("text/plain", ".txt"),
+    "docx": ("application/vnd.openxmlformats-officedocument", ".docx"),
+}
+
+
+def fetch_google_doc(url: str, timeout: int = 30, fmt: str = "txt"):
+    """Fetch a Google Doc (or one of its tabs) as text or as a .docx.
 
     Returns ``(raw_bytes, display_name)``. Raises ValueError with a message
     meant for the user — a wrong link and a private document are the two
     things that actually go wrong, and they need different fixes.
+
+    ``fmt`` is "txt" for a witness, whose text is all that is wanted, or
+    "docx" for a collation report, which is a table: exported as text its
+    columns collapse into one stream and there is no telling the witnesses
+    apart again.
     """
+    want_type, suffix = _GDOC_FORMATS[fmt]
     url = (url or "").strip()
     if not url:
         raise ValueError("no link given.")
@@ -250,7 +266,7 @@ def fetch_google_doc(url: str, timeout: int = 30):
         )
     doc_id = m.group(1)
     tab = _GDOC_TAB_RE.search(url)
-    export = f"https://docs.google.com/document/d/{doc_id}/export?format=txt"
+    export = f"https://docs.google.com/document/d/{doc_id}/export?format={fmt}"
     if tab:
         export += f"&tab={tab.group(1)}"
 
@@ -273,9 +289,9 @@ def fetch_google_doc(url: str, timeout: int = 30):
     except Exception as exc:  # network trouble, DNS, timeout
         raise ValueError(f"could not reach Google Docs ({exc}).")
 
-    if "text/plain" not in ctype:
+    if want_type not in ctype:
         raise ValueError(
-            "Google returned a sign-in page instead of the text. Set the "
+            "Google returned a sign-in page instead of the document. Set the "
             "document's sharing to “Anyone with the link → Viewer”."
         )
 
@@ -287,8 +303,8 @@ def fetch_google_doc(url: str, timeout: int = 30):
         got = re.search(r'filename="([^"]+)"', disposition)
         if got:
             name = got.group(1)
-    if name.lower().endswith(".txt"):
-        name = name[:-4]
+    if name.lower().endswith(suffix):
+        name = name[: -len(suffix)]
     name = re.sub(r"\s+", " ", name).strip()
     if tab:
         # every tab of one document reports the same title, so the tab id is
@@ -1761,19 +1777,51 @@ st.divider()
 st.subheader("2 · The witnesses")
 
 if use_report:
-    report_file = st.file_uploader(
-        "Collation report (.docx)",
-        type=["docx"],
-        key="repfile",
-        help="A report this tool produced. Its columns are read back as the "
-        "witnesses — correct the OCR in them and the collation is redone "
-        "from your corrections.",
+    # The report can arrive either way, because the correcting happens
+    # wherever the correctors are: a .docx passed around, or one Google Doc
+    # several people work in at once. It is fetched as .docx rather than as
+    # text either way — the report is a table, and exported as text its
+    # columns collapse into one stream with no telling the witnesses apart.
+    report_via = st.radio(
+        "Where the report is",
+        options=["Upload the file", "Google Doc link"],
+        horizontal=True,
+        key="repvia",
+        label_visibility="collapsed",
     )
+    report_file = report_link = None
+    if report_via.startswith("Upload"):
+        report_file = st.file_uploader(
+            "Collation report (.docx)",
+            type=["docx"],
+            key="repfile",
+            help="A report this tool produced. Its columns are read back as "
+            "the witnesses — correct the OCR in them and the collation is "
+            "redone from your corrections.",
+        )
+    else:
+        report_link = st.text_input(
+            "Google Doc link to the collation report",
+            key="replnk",
+            placeholder="https://docs.google.com/document/d/…/edit",
+            help="The report opened in Google Docs, shared “Anyone with the "
+            "link → Viewer”. Its table is read back as the witnesses, so "
+            "corrections made in the columns are what gets collated.",
+        )
+
+    _report_raw = None
     if report_file is not None:
+        _report_raw = report_file.getvalue()
+    elif report_link:
         try:
-            report_labels, report_texts = parse_collation_report(
-                report_file.getvalue()
-            )
+            _report_raw, _rep_name = fetch_google_doc(report_link, fmt="docx")
+            st.success(f"Fetched from Google Docs: {_rep_name}")
+        except ValueError as _exc:
+            st.error(str(_exc))
+
+    if _report_raw is not None:
+        try:
+            report_labels, report_texts = parse_collation_report(_report_raw)
         except ValueError as _exc:
             st.error(str(_exc))
             report_labels, report_texts = [], []
@@ -1986,7 +2034,7 @@ if not ready:
     # A caption, not an alert: the disabled button already says it cannot run,
     # so this only needs to say what is missing.
     st.caption(
-        "Upload a collation report above to enable this."
+        "Add a collation report above to enable this."
         if use_report else
         "Paste a link for every witness above to enable this."
         if use_links else

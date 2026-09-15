@@ -45,7 +45,7 @@ One choice, which reshapes the rest of the form.
 |---|---|
 | **Upload .txt files** | Plain text, any common encoding |
 | **Google Doc links** | Paste the URL from the address bar |
-| **Upload a collation report** | A report this tool made, after you have corrected it |
+| **Upload a collation report** | A report this tool made, after you have corrected it — as a `.docx` or as a Google Doc link |
 
 **Google Docs** are read through the plain-text export, so no API key is
 needed — but the document must be shared **Anyone with the link → Viewer**,
@@ -54,6 +54,11 @@ private document returns a sign-in page, and the tool says so rather than
 collating it. If the document has tabs, the `?tab=…` in the URL selects the one
 you are looking at; without it you would get every tab concatenated. Footnote
 bodies, which Google appends after a rule of underscores, are dropped.
+
+**A collation report is fetched as a `.docx`, not as text**, because it is a
+table: exported as text its columns collapse into a single stream and there is
+no telling the witnesses apart again. Everything else is the same — the same
+sharing requirement, the same errors.
 
 **Encoding** is worked out for you. Files are read as UTF-8, and when that
 fails — PDF extractors and older Mac tools often write Mac OS Roman — the text
@@ -204,6 +209,11 @@ for all of them at once. That supports a workflow the tool was built around:
 3. **Correct the OCR inside the report's columns** — this gives you version 2
 4. Feed the corrected report back in → final apparatus, plus an archive of the
    corrected texts
+
+Step 3 can happen in Word or in Google Docs, and step 4 takes the report either
+way — upload the file, or paste a link to it. The Google route is the one to
+use when the correcting is shared: several people in one document, or one
+person moving between machines.
 
 Step 4 re-collates from scratch, because once the witness texts change the old
 notes are stale by definition. It reads page markers and note references by
