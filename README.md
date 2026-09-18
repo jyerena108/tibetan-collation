@@ -143,10 +143,25 @@ Head marks  @ # !              2       1       0       0
 Pipe written for shad  |       0       0       0       7
 Explicit space  _              5       0       0       0
 Shad  /                      317     292     286     279
+Pāda-final shads omitted       1       0       8       1
 ```
 
 Read as a profile that says something: AB1 stacks sixteen forms where the base
-stacks three.
+stacks three, and DX1 runs eight pairs of verse lines together where the others
+run one or none.
+
+**That last row counts something absent**, which is why nothing else surfaces
+it. Tibetan verse is isosyllabic — every pāda of a passage carries the same
+syllable count, classically 7, 9 or 11 — and a shad closes each one. When a
+witness omits that shad, two pādas run together as one long line. The words are
+all present and in order, so the apparatus sees nothing wrong; only the metre
+reveals it.
+
+The count is `–`, not `0`, when no verse could be found at all. That happens
+when a transcription never distinguishes the double shad from the single: verse
+lines end in a double 87–94% of the time across these witnesses and prose
+segments only 29–53%, so without that distinction there is nothing to measure,
+and a zero there would claim the witness omits nothing.
 
 **The table follows the script your texts are in.** Wylie witnesses are
 labelled in Wylie, exactly as above. Unicode Tibetan witnesses are labelled in

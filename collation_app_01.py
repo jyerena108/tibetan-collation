@@ -1189,6 +1189,161 @@ def _write_cell(para, text, marks, shade):
             set_run_background_color(run, shade)
 
 
+# ── Verse structure ──────────────────────────────────────────────────
+# Tibetan verse is isosyllabic: every pada of a passage carries the same
+# syllable count, and a shad closes each one. That makes the boundaries
+# findable — but only the metre can find them, because the shads are not
+# reliable. A witness may write one inside a pada, where a pecha line ended,
+# and may omit one between two padas entirely. Counting how often it omits
+# them says something about the witness, which is why the profile reports it.
+#
+# Nothing here rewrites a text; it only measures.
+
+VERSE_METRES = (7, 9, 11)     # a 13 or 15 admits prose clauses as "verse"
+VERSE_MIN_RUN = 3             # fewer lines than this is not yet a passage
+VERSE_TOL = 1                 # a pada may run a syllable over or short
+_VERSE_SHADS = "\u0f0d\u0f0e\u0f0f\u0f10\u0f11\u0f14/|"
+_VERSE_SPLIT_RE = re.compile("([%s]+)" % re.escape(_VERSE_SHADS))
+_VERSE_SHAD_GAP_RE = re.compile(
+    "([%s])[\\s_]+(?=[%s])" % (re.escape(_VERSE_SHADS), re.escape(_VERSE_SHADS))
+)
+_VERSE_SYL_RE = re.compile("[\u0f0b\u0f0c\s_]+")
+
+
+def _verse_syllables(text):
+    """Syllables, by tsheg in Tibetan script and by space in Wylie."""
+    text = re.sub("[%s]" % re.escape(_VERSE_SHADS), " ", text)
+    return [x for x in _VERSE_SYL_RE.split(text.strip()) if x]
+
+
+def _verse_segments(text):
+    """Split at shads, each segment keeping the shad that closes it.
+
+    Shads written apart are closed up first: GX1 writes the double shad as
+    "/ /" and pecha-style Unicode writes it as "\u0f0d    \u0f0d", and left
+    apart every pada boundary reads as two singles instead of one double.
+    """
+    text = _VERSE_SHAD_GAP_RE.sub(r"\1", text)
+    out = []
+    for piece in _VERSE_SPLIT_RE.split(text):
+        if piece and piece[0] in _VERSE_SHADS:
+            if out:
+                out[-1][1] = piece
+        elif piece.strip():
+            out.append([" ".join(_verse_syllables(piece)), ""])
+    return [(t, sh) for t, sh in out if t]
+
+
+def _verse_lines_at(segs, i, metre):
+    """Build lines of `metre` syllables from segs[i:], joining only.
+
+    Never splitting is what lets a pada the witness broke across a line come
+    back whole; it is also why a missing shad cannot be recovered here.
+    """
+    lines, k = [], i
+    while k < len(segs):
+        buf, n = [], 0
+        j = k
+        while j < len(segs) and n < metre - VERSE_TOL:
+            buf.append(segs[j]); n += len(_verse_syllables(segs[j][0])); j += 1
+        if not buf or not (metre - VERSE_TOL <= n <= metre + VERSE_TOL):
+            break
+        lines.append((buf[-1][1], n, False))
+        k = j
+    return lines, k
+
+
+def _verse_metrical_before(segs, k, metre):
+    """Is there a metrical line immediately before segs[k] — alone, or as two
+    segments joined across a shad?"""
+    if k <= 0:
+        return False
+    n = len(_verse_syllables(segs[k - 1][0]))
+    if metre - VERSE_TOL <= n <= metre + VERSE_TOL:
+        return True
+    if k > 1:
+        n += len(_verse_syllables(segs[k - 2][0]))
+        return metre - VERSE_TOL <= n <= metre + VERSE_TOL
+    return False
+
+
+def _verse_extend_back(segs, start, metre, lines, limit=0):
+    """Walk back from a confirmed passage, recovering padas the punctuation
+    hid, and return how many shads had to be reconstructed.
+
+    A segment may be split only where it is an EXACT multiple of the metre and
+    a metrical line still stands behind it. Both conditions are needed: a
+    21-syllable prose clause is also three sevens, and is given away by having
+    nothing metrical before it. Without them this cuts prose into pieces, and
+    through the middle of words.
+    """
+    i, recon = start, 0
+    while i > limit:
+        text, shad = segs[i - 1]
+        w = _verse_syllables(text); n = len(w)
+        parts = round(n / metre) if metre else 0
+        if parts >= 2 and n == parts * metre and \
+                _verse_metrical_before(segs, i - 1, metre):
+            lines[:0] = [(shad, metre, p < parts - 1) for p in range(parts)]
+            recon += parts - 1
+            i -= 1
+            continue
+        if metre - VERSE_TOL <= n <= metre + VERSE_TOL:
+            lines.insert(0, (shad, n, False)); i -= 1; continue
+        if i - 2 >= limit:
+            m = len(_verse_syllables(segs[i - 2][0])) + n
+            if metre - VERSE_TOL <= m <= metre + VERSE_TOL:
+                lines.insert(0, (shad, m, False)); i -= 2; continue
+        break
+    return i, recon
+
+
+def verse_blocks(text):
+    """Every verse passage in a text, as ``(lines, metre, reconstructed)``.
+
+    A passage is a run of at least VERSE_MIN_RUN metrical lines most of which
+    close with a double shad. That last test is what keeps prose out: verse
+    lines end in a double 87-94% of the time across the Jataka witnesses,
+    prose segments only 29-53%, and without it any run of prose clauses that
+    happens to fall near a metre reads as verse.
+    """
+    segs = _verse_segments(text)
+    blocks, i, run = [], 0, 0
+    while i < len(segs):
+        found = None
+        for m in VERSE_METRES:      # ascending: a 15 would eat two sevens
+            lines, j = _verse_lines_at(segs, i, m)
+            if len(lines) < VERSE_MIN_RUN:
+                continue
+            doubled = sum(1 for sh, _, _ in lines if len(sh) >= 2)
+            if doubled * 2 < len(lines):
+                continue
+            found = (lines, j, m)
+            break
+        if found:
+            lines, j, m = found
+            back, recon = _verse_extend_back(segs, i, m, lines, limit=run)
+            blocks.append((lines, m, recon))
+            i = run = j
+        else:
+            i += 1
+    return blocks
+
+
+def omitted_pada_shads(text):
+    """How many pada boundaries this witness leaves unmarked.
+
+    NOT_APPLICABLE when no verse is found at all — which is a real outcome,
+    not a zero: a transcription that never distinguishes the double shad
+    yields no passages, and reporting 0 there would claim the witness omits
+    nothing when in fact nothing could be looked for.
+    """
+    blocks = verse_blocks(text)
+    if not blocks:
+        return NOT_APPLICABLE
+    return sum(recon for _, _, recon in blocks)
+
+
 # What each row of the orthographic profile counts. These are features the
 # collation normalises away, so without this table they leave no trace — yet
 # they describe a witness: which scriptorium stacked its Sanskrit loans, which
@@ -1240,6 +1395,11 @@ ORTHOGRAPHIC_FEATURES = (
      lambda t: t.count("/") + sum(t.count(c) for c in _UNI_SHAD)),
     ("Non-breaking tsheg", None, "༌", frozenset((TIBETAN,)),
      lambda t: t.count(_NB_TSHEG)),
+    # The one row that counts something absent rather than present: how often
+    # a witness runs two padas together with no shad between them. Invisible
+    # in the apparatus, because the words are all there and in order — it is
+    # the punctuation that is missing, and only the metre reveals it.
+    ("Pāda-final shads omitted", None, None, BOTH_SCRIPTS, omitted_pada_shads),
 )
 
 
@@ -1364,7 +1524,9 @@ def add_orthographic_profile(doc, texts, labels, cells=None):
     doc.add_heading("Orthographic profile", level=2)
     intro = (
         "Features normalised before comparison and therefore absent from the "
-        "apparatus. They describe the witnesses rather than the text."
+        "apparatus. They describe the witnesses rather than the text. The "
+        "last row counts something absent instead: pādas the witness runs "
+        "together with no shad between them, which only the metre reveals."
     )
     if any(_script_of(t) is TIBETAN for t in texts):
         # Otherwise a Tibetan-script run looks as though the stacking count
