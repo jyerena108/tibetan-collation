@@ -143,12 +143,12 @@ Head marks  @ # !              2       1       0       0
 Pipe written for shad  |       0       0       0       7
 Explicit space  _              5       0       0       0
 Shad  /                      317     292     286     279
-Pāda-final shads omitted       1       0       8       1
+Pāda-final shads omitted       2       1       0       1
 ```
 
 Read as a profile that says something: AB1 stacks sixteen forms where the base
-stacks three, and DX1 runs eight pairs of verse lines together where the others
-run one or none.
+stacks three, and BX1 runs two pairs of verse lines together where DX1 runs
+none.
 
 **That last row counts something absent**, which is why nothing else surfaces
 it. Tibetan verse is isosyllabic — every pāda of a passage carries the same
@@ -157,10 +157,36 @@ witness omits that shad, two pādas run together as one long line. The words are
 all present and in order, so the apparatus sees nothing wrong; only the metre
 reveals it.
 
+**Every omission is also listed**, in a third table, with what each witness
+writes at the same place — because a count cannot say whether it is a reading
+or a slip of the OCR, and those call for opposite responses:
+
+| Pāda | Runs into | BX1 | AB1 | DX1 | GX1 |
+|---|---|---|---|---|---|
+| …brtson 'grus brtan pa'i mthus | 'jig rten mchog gi spyod pa bstan… | **om.** `[BX1.3r.1]` | `/ /` | `// /` | `/ /` |
+| dam pa'i spyod las gzhan du byas | dud 'gro'i gzugs can bdag nyid che | **om.** `[BX1.3v.1]` | `/ /` | `//` | **om.** `[GX1.160v.1]` |
+| …ngo mtshar skye 'gyur | skyes bu dam pa de yi mthu yis byas | — | **om.** `[AB1.273]` | `//` | — |
+
+**Read across, and the witnesses answer for each other.** In the first row
+three of them write a shad, so the boundary is certainly a boundary and BX1 is
+the one that dropped it — with a folio reference saying where to correct it in
+[the round trip](#the-round-trip). In the second, two omit and two do not: a
+shared reading rather than a slip. A `—` means that witness does not have the
+passage, which is not an omission and is not counted as one.
+
+Every omission carries the folio it falls on in **that** witness, so there is
+somewhere to go and look. Each witness's shad is shown **as it writes it**, so
+`/ /` against `//` also tells you how the transcriptions differ.
+
+Page/folio tags are removed before any of this is measured — left in they are
+read as a syllable and throw the metre off for every pāda they touch — and
+remembering where they stood is what lets an omission be cited by folio. They
+are untouched in the output documents.
+
 The count is `–`, not `0`, when no verse could be found at all. That happens
 when a transcription never distinguishes the double shad from the single: verse
-lines end in a double 87–94% of the time across these witnesses and prose
-segments only 29–53%, so without that distinction there is nothing to measure,
+lines end in a double 87–93% of the time across these witnesses and prose
+segments only 27–52%, so without that distinction there is nothing to measure,
 and a zero there would claim the witness omits nothing.
 
 **The table follows the script your texts are in.** Wylie witnesses are

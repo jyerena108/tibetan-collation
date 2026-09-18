@@ -1202,18 +1202,66 @@ def _write_cell(para, text, marks, shade):
 VERSE_METRES = (7, 9, 11)     # a 13 or 15 admits prose clauses as "verse"
 VERSE_MIN_RUN = 3             # fewer lines than this is not yet a passage
 VERSE_TOL = 1                 # a pada may run a syllable over or short
+VERSE_MAX_SPLIT = 2           # one missing shad, not a run of them — see below
 _VERSE_SHADS = "\u0f0d\u0f0e\u0f0f\u0f10\u0f11\u0f14/|"
 _VERSE_SPLIT_RE = re.compile("([%s]+)" % re.escape(_VERSE_SHADS))
 _VERSE_SHAD_GAP_RE = re.compile(
     "([%s])[\\s_]+(?=[%s])" % (re.escape(_VERSE_SHADS), re.escape(_VERSE_SHADS))
 )
 _VERSE_SYL_RE = re.compile("[\u0f0b\u0f0c\s_]+")
+_VERSE_TAG_RE = re.compile(r"\[[^\[\]\n]*\]")
+
+# One line of verse: the reading, the shad that closes it, its syllable count,
+# and whether that shad had to be reconstructed because the witness omitted it.
+VerseLine = namedtuple("VerseLine", "text shad syllables reconstructed")
+# One passage: its lines, its metre, and the syllable offset it begins at.
+VerseBlock = namedtuple("VerseBlock", "lines metre at")
 
 
 def _verse_syllables(text):
     """Syllables, by tsheg in Tibetan script and by space in Wylie."""
     text = re.sub("[%s]" % re.escape(_VERSE_SHADS), " ", text)
     return [x for x in _VERSE_SYL_RE.split(text.strip()) if x]
+
+
+def _verse_join(words, tibetan):
+    """Rejoin syllables in their own script."""
+    return (TSHEG.join(words) + TSHEG) if tibetan else " ".join(words)
+
+
+def strip_page_tags(text):
+    """Remove bracketed page/folio tags, remembering where each one stood.
+
+    Returns ``(clean, marks)`` with marks as ``[(syllable_index, tag)…]``.
+    A tag left in is read as a syllable and throws the metre off by one for
+    every pada it touches — the same reason they are stripped before the
+    collation, applied to counting rather than comparing. Remembering the
+    positions is what lets an omission be cited by folio afterwards.
+    """
+    out, marks, seen, pos = [], [], 0, 0
+    for m in _VERSE_TAG_RE.finditer(text):
+        chunk = text[pos:m.start()]
+        out.append(chunk)
+        seen += len(_verse_syllables(chunk))
+        marks.append((seen, m.group(0)))
+        pos = m.end()
+    out.append(text[pos:])
+    return " ".join(out), marks
+
+
+def _verse_measurable(text):
+    """The part of a text whose syllables can be counted.
+
+    Page tags go, because a tag left in is read as a syllable and throws the
+    metre off for every pada it touches. In a Tibetan-script text, runs of
+    Latin script go too: a document may carry an English heading or a note,
+    and "Part 2. Diamond Mind meditation" counted as five Tibetan syllables
+    invents verse that is not there.
+    """
+    clean, marks = strip_page_tags(text)
+    if _TIBETAN_CHAR_RE.search(clean):
+        clean = re.sub(r"[A-Za-z][A-Za-z0-9.,'\-]*", " ", clean)
+    return clean, marks
 
 
 def _verse_segments(text):
@@ -1230,11 +1278,11 @@ def _verse_segments(text):
             if out:
                 out[-1][1] = piece
         elif piece.strip():
-            out.append([" ".join(_verse_syllables(piece)), ""])
-    return [(t, sh) for t, sh in out if t]
+            out.append([_verse_syllables(piece), ""])
+    return [(w, sh) for w, sh in out if w]
 
 
-def _verse_lines_at(segs, i, metre):
+def _verse_lines_at(segs, i, metre, tibetan):
     """Build lines of `metre` syllables from segs[i:], joining only.
 
     Never splitting is what lets a pada the witness broke across a line come
@@ -1245,10 +1293,11 @@ def _verse_lines_at(segs, i, metre):
         buf, n = [], 0
         j = k
         while j < len(segs) and n < metre - VERSE_TOL:
-            buf.append(segs[j]); n += len(_verse_syllables(segs[j][0])); j += 1
+            buf.append(segs[j]); n += len(segs[j][0]); j += 1
         if not buf or not (metre - VERSE_TOL <= n <= metre + VERSE_TOL):
             break
-        lines.append((buf[-1][1], n, False))
+        words = [w for seg in buf for w in seg[0]]
+        lines.append(VerseLine(_verse_join(words, tibetan), buf[-1][1], n, False))
         k = j
     return lines, k
 
@@ -1258,18 +1307,18 @@ def _verse_metrical_before(segs, k, metre):
     segments joined across a shad?"""
     if k <= 0:
         return False
-    n = len(_verse_syllables(segs[k - 1][0]))
+    n = len(segs[k - 1][0])
     if metre - VERSE_TOL <= n <= metre + VERSE_TOL:
         return True
     if k > 1:
-        n += len(_verse_syllables(segs[k - 2][0]))
+        n += len(segs[k - 2][0])
         return metre - VERSE_TOL <= n <= metre + VERSE_TOL
     return False
 
 
-def _verse_extend_back(segs, start, metre, lines, limit=0):
+def _verse_extend_back(segs, start, metre, lines, tibetan, limit=0):
     """Walk back from a confirmed passage, recovering padas the punctuation
-    hid, and return how many shads had to be reconstructed.
+    hid, and return the index the passage really begins at.
 
     A segment may be split only where it is an EXACT multiple of the metre and
     a metrical line still stands behind it. Both conditions are needed: a
@@ -1277,53 +1326,105 @@ def _verse_extend_back(segs, start, metre, lines, limit=0):
     nothing metrical before it. Without them this cuts prose into pieces, and
     through the middle of words.
     """
-    i, recon = start, 0
+    i = start
     while i > limit:
-        text, shad = segs[i - 1]
-        w = _verse_syllables(text); n = len(w)
+        words, shad = segs[i - 1]
+        n = len(words)
         parts = round(n / metre) if metre else 0
-        if parts >= 2 and n == parts * metre and \
+        # Only ever two. A segment of nine times the metre is not nine padas
+        # with eight shads missing in a row; it is a prose clause whose length
+        # divides by chance, which happens about one time in seven. DX1 has
+        # one of 63 syllables, and without this cap it was cut into nine
+        # "padas" straight through the middle of words.
+        if 2 <= parts <= VERSE_MAX_SPLIT and n == parts * metre and \
                 _verse_metrical_before(segs, i - 1, metre):
-            lines[:0] = [(shad, metre, p < parts - 1) for p in range(parts)]
-            recon += parts - 1
+            made = []
+            for p in range(parts):
+                chunk = words[p * metre:(p + 1) * metre]
+                made.append(VerseLine(_verse_join(chunk, tibetan), shad, metre,
+                                      p < parts - 1))
+            lines[:0] = made
             i -= 1
             continue
         if metre - VERSE_TOL <= n <= metre + VERSE_TOL:
-            lines.insert(0, (shad, n, False)); i -= 1; continue
+            lines.insert(0, VerseLine(_verse_join(words, tibetan), shad, n, False))
+            i -= 1
+            continue
         if i - 2 >= limit:
-            m = len(_verse_syllables(segs[i - 2][0])) + n
+            prev = segs[i - 2][0]
+            m = len(prev) + n
             if metre - VERSE_TOL <= m <= metre + VERSE_TOL:
-                lines.insert(0, (shad, m, False)); i -= 2; continue
+                lines.insert(0, VerseLine(_verse_join(prev + words, tibetan),
+                                          shad, m, False))
+                i -= 2
+                continue
         break
-    return i, recon
+    return i
+
+
+def _verse_extend_on(segs, stop, metre, lines, tibetan):
+    """Carry a confirmed passage forward past a boundary the witness omitted.
+
+    The mirror of _verse_extend_back, and needed for the same reason: a run of
+    intact padas ends the moment it meets a segment of twice the metre, and
+    without this the omission sitting just after a passage is never reached.
+    The same two conditions apply — an exact multiple, and a metrical line
+    already standing before it, which here is the passage itself.
+    """
+    i = stop
+    while i < len(segs):
+        words, shad = segs[i]
+        n = len(words)
+        parts = round(n / metre) if metre else 0
+        if 2 <= parts <= VERSE_MAX_SPLIT and n == parts * metre:
+            for p in range(parts):
+                chunk = words[p * metre:(p + 1) * metre]
+                lines.append(VerseLine(_verse_join(chunk, tibetan), shad, metre,
+                                       p < parts - 1))
+            i += 1
+            continue
+        if metre - VERSE_TOL <= n <= metre + VERSE_TOL:
+            lines.append(VerseLine(_verse_join(words, tibetan), shad, n, False))
+            i += 1
+            continue
+        break
+    return i
 
 
 def verse_blocks(text):
-    """Every verse passage in a text, as ``(lines, metre, reconstructed)``.
+    """Every verse passage in a text, as VerseBlock records.
 
     A passage is a run of at least VERSE_MIN_RUN metrical lines most of which
     close with a double shad. That last test is what keeps prose out: verse
     lines end in a double 87-94% of the time across the Jataka witnesses,
     prose segments only 29-53%, and without it any run of prose clauses that
     happens to fall near a metre reads as verse.
+
+    Page tags are stripped first; the text is measured, never rewritten.
     """
-    segs = _verse_segments(text)
+    tibetan = bool(_TIBETAN_CHAR_RE.search(text))
+    clean, _marks = _verse_measurable(text)
+    segs = _verse_segments(clean)
+    starts, seen = [], 0
+    for words, _sh in segs:
+        starts.append(seen); seen += len(words)
     blocks, i, run = [], 0, 0
     while i < len(segs):
         found = None
         for m in VERSE_METRES:      # ascending: a 15 would eat two sevens
-            lines, j = _verse_lines_at(segs, i, m)
+            lines, j = _verse_lines_at(segs, i, m, tibetan)
             if len(lines) < VERSE_MIN_RUN:
                 continue
-            doubled = sum(1 for sh, _, _ in lines if len(sh) >= 2)
+            doubled = sum(1 for l in lines if len(l.shad) >= 2)
             if doubled * 2 < len(lines):
                 continue
             found = (lines, j, m)
             break
         if found:
             lines, j, m = found
-            back, recon = _verse_extend_back(segs, i, m, lines, limit=run)
-            blocks.append((lines, m, recon))
+            back = _verse_extend_back(segs, i, m, lines, tibetan, limit=run)
+            j = _verse_extend_on(segs, j, m, lines, tibetan)
+            blocks.append(VerseBlock(lines, m, starts[back]))
             i = run = j
         else:
             i += 1
@@ -1341,7 +1442,89 @@ def omitted_pada_shads(text):
     blocks = verse_blocks(text)
     if not blocks:
         return NOT_APPLICABLE
-    return sum(recon for _, _, recon in blocks)
+    return sum(1 for b in blocks for l in b.lines if l.reconstructed)
+
+
+def _junction_in(text, left_tail, right_head):
+    """What one witness writes between two padas, as written.
+
+    Returns ``(separator, folio)`` — the separator as written ("//", "/ /", a
+    Unicode shad, or "" for nothing at all) and the page tag the junction
+    falls under, or ``(None, "")`` when this witness does not have the
+    passage. The tail and head are matched by syllable, so a variant reading
+    elsewhere in the pada does not hide the junction.
+
+    The folio comes from here rather than from the witness's own verse
+    detection, so a witness identified as omitting only because the others
+    mark the boundary still says where to look.
+    """
+    clean, marks = _verse_measurable(text)
+    sylls, spans, pos = [], [], 0
+    # Tokens must break exactly where _verse_syllables breaks — on the tsheg
+    # as well as on whitespace — or a Tibetan-script text never matches its
+    # own junctions and every witness reads as not having the passage.
+    for m in re.finditer(r"[^\u0f0b\u0f0c\s_%s]+" % re.escape(_VERSE_SHADS), clean):
+        sylls.append(m.group(0)); spans.append((m.start(), m.end()))
+    want = list(left_tail) + list(right_head)
+    n = len(left_tail)
+    for i in range(len(sylls) - len(want) + 1):
+        if sylls[i:i + len(want)] == want:
+            gap = clean[spans[i + n - 1][1]:spans[i + n][0]]
+            folio = ""
+            for pos, mk in marks:
+                if pos <= i + n:
+                    folio = mk
+            return re.sub(r"[\s_]+", " ", gap).strip(), folio
+    return None, ""
+
+
+def omitted_pada_sites(texts, labels, context=3):
+    """Every pada boundary a witness leaves unmarked, with what the others
+    write at the same place.
+
+    A count says a witness runs padas together; it cannot say whether that is
+    the witness or the OCR, and those call for opposite responses. The other
+    witnesses settle it: where they all write a shad and one does not, the
+    boundary is certain and the omission is that witness's. Where none of them
+    writes it, the reading is shared and there is nothing to correct.
+    """
+    sites = []
+    for label, text in zip(labels, texts):
+        _clean, marks = _verse_measurable(text)
+        for blk in verse_blocks(text):
+            at = blk.at
+            for n, line in enumerate(blk.lines):
+                if line.reconstructed and n + 1 < len(blk.lines):
+                    tag = ""
+                    for pos, mk in marks:
+                        if pos <= at:
+                            tag = mk
+                    left = _verse_syllables(line.text)
+                    right = _verse_syllables(blk.lines[n + 1].text)
+                    sites.append({
+                        "by": label, "tag": tag,
+                        "left": line.text, "right": blk.lines[n + 1].text,
+                        "tail": left[-context:], "head": right[:context],
+                    })
+                at += line.syllables
+    # one row per junction, however many witnesses omit it there
+    rows, seen = [], {}
+    for st_ in sites:
+        key = (tuple(st_["tail"]), tuple(st_["head"]))
+        if key in seen:
+            seen[key]["omits"][st_["by"]] = st_["tag"]
+            continue
+        witnesses, folios = {}, {}
+        for label, text in zip(labels, texts):
+            sep, folio = _junction_in(text, st_["tail"], st_["head"])
+            witnesses[label] = sep
+            folios[label] = folio
+        row = {"left": st_["left"], "right": st_["right"],
+               "witnesses": witnesses, "folios": folios,
+               "omits": {st_["by"]: st_["tag"]}}
+        seen[key] = row
+        rows.append(row)
+    return rows
 
 
 # What each row of the orthographic profile counts. These are features the
@@ -1363,6 +1546,8 @@ _STACK_WORD_RE = re.compile(r"[A-Za-z']*\+[A-Za-z']*")
 _UNI_HEAD_MARKS = "༄༅༆༇༈"
 _UNI_SHAD = "།༎༏༐༑༔"
 _NB_TSHEG = "༌"
+
+_OMITTED_PADA_ROW = "Pāda-final shads omitted"
 
 WYLIE, TIBETAN = "wylie", "tibetan"
 BOTH_SCRIPTS = frozenset((WYLIE, TIBETAN))
@@ -1399,7 +1584,7 @@ ORTHOGRAPHIC_FEATURES = (
     # a witness runs two padas together with no shad between them. Invisible
     # in the apparatus, because the words are all there and in order — it is
     # the punctuation that is missing, and only the metre reveals it.
-    ("Pāda-final shads omitted", None, None, BOTH_SCRIPTS, omitted_pada_shads),
+    (_OMITTED_PADA_ROW, None, None, BOTH_SCRIPTS, omitted_pada_shads),
 )
 
 
@@ -1435,10 +1620,24 @@ def orthographic_profile(texts, labels):
     for name, wylie_marks, tib_marks, feat_scripts, fn in ORTHOGRAPHIC_FEATURES:
         if not (feat_scripts & present):
             continue
+        counts = [fn(t) if s in feat_scripts else NOT_APPLICABLE
+                  for t, s in zip(texts, scripts)]
+        if name == _OMITTED_PADA_ROW and len(texts) > 1:
+            # Count against the junctions the witnesses establish between
+            # them, not against what each could find alone. A witness that
+            # omits several boundaries may fall below the run needed to
+            # detect any verse at all, and would report "not applicable"
+            # while the table below plainly shows it omitting them.
+            sites = omitted_pada_sites(texts, labels)
+            if sites:
+                # "" is the witness writing nothing between two padas;
+                # None is the witness not having the passage at all, which is
+                # not an omission and must not be counted as one.
+                counts = [sum(1 for r in sites if r["witnesses"].get(lb) == "")
+                          for lb in labels]
         rows.append((
             _feature_label(name, wylie_marks, tib_marks, present & feat_scripts),
-            [fn(t) if s in feat_scripts else NOT_APPLICABLE
-             for t, s in zip(texts, scripts)],
+            counts,
         ))
     stacked = {}
     for label, text in zip(labels, texts):
@@ -1571,6 +1770,46 @@ def add_orthographic_profile(doc, texts, labels, cells=None):
             cs[i].paragraphs[0].add_run(text)
         cs[len(labels)].paragraphs[0].add_run(str(n))
     _style_table(st_table, numeric_from=len(labels))
+
+    sites = omitted_pada_sites(texts, labels)
+    if not sites:
+        return
+
+    doc.add_paragraph()
+    doc.add_heading("Pādas run together", level=2)
+    doc.add_paragraph(
+        "Where a witness writes two pādas with no shad between them, and what "
+        "the others write at the same place. The count above says how often; "
+        "this says where, and lets the witnesses answer for each other — a "
+        "boundary the others all mark is certainly a boundary, so the omission "
+        "is that witness's and can be corrected. One none of them marks is a "
+        "shared reading, and there is nothing to correct."
+    )
+    st_cols = 2 + len(labels)
+    site_table = doc.add_table(rows=1, cols=st_cols)
+    hdr = site_table.rows[0].cells
+    hdr[0].paragraphs[0].add_run("Pāda")
+    hdr[1].paragraphs[0].add_run("Runs into")
+    for i, label in enumerate(labels):
+        hdr[2 + i].paragraphs[0].add_run(label)
+    for row in sites:
+        cs = site_table.add_row().cells
+        cs[0].paragraphs[0].add_run(row["left"])
+        cs[1].paragraphs[0].add_run(row["right"])
+        for i, label in enumerate(labels):
+            cell = cs[2 + i].paragraphs[0]
+            sep = row["witnesses"].get(label)
+            if sep is None:
+                cell.add_run("—")          # this witness lacks the passage
+            elif sep == "":
+                run = cell.add_run(OMITTED_MARK)
+                run.bold = True
+                folio = row["folios"].get(label) or row["omits"].get(label, "")
+                if folio:
+                    cell.add_run("  " + folio)
+            else:
+                cell.add_run(sep)
+    _style_table(site_table, numeric_from=st_cols)
 
 
 def export_collation_report(cells, labels, names, profile_texts=None):
