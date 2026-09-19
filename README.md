@@ -212,12 +212,17 @@ Every omission carries the folio it falls on in **that** witness, so there is
 somewhere to go and look. Each witness's shad is shown **as it writes it**, so
 `/ /` against `//` also tells you how the transcriptions differ.
 
-**A dash means that witness reads differently at this point** — there is no
-matching junction in it to compare, which is not the same as omitting one, and
-it is not counted as an omission. In the third row BX1 reads `skyes gyur te`
-where the others read `skye 'gyur bar`, so there is no shared boundary to
-judge. A single syllable of variation is tolerated, so a witness that writes
-`skyes 'gyur bar` against `skye 'gyur bar` still has its say.
+The three signs, which the documents spell out under the table too:
+
+| Sign | Means |
+|---|---|
+| **om.** | this witness writes no shad between the two pādas — the omission, with the folio beside it saying where to find it in that witness |
+| **`//`** or **`/ /`** | the shad as this witness writes it, spaced or closed up; it marks the boundary and so confirms one belongs here |
+| **—** | this witness reads differently at this point, so there is no matching junction in it to compare — **not** an omission, and not counted as one |
+
+In the third row BX1 reads `skyes gyur te` where the others read
+`skye 'gyur bar`, so there is no shared boundary to judge. A single syllable of
+variation is tolerated, so GX1 writing `skyes 'gyur bar` still has its say.
 
 Page/folio tags are removed before any of this is measured — left in they are
 read as a syllable and throw the metre off for every pāda they touch — and

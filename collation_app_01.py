@@ -1909,12 +1909,26 @@ def add_orthographic_profile(doc, texts, labels, cells=None):
         "is that witness's and can be corrected. One none of them marks is a "
         "shared reading, and there is nothing to correct."
     )
-    doc.add_paragraph(
-        "Each witness's shad is shown as it writes it, and the folio is that "
-        "witness's own. A dash means the witness reads differently at this "
-        "point, so there is no matching junction in it to compare — not that "
-        "it omits anything, and it is not counted as an omission."
-    )
+    # Spelled out symbol by symbol. The three are easy to confuse — two of
+    # them look like absences and only one is — and a reader coming to this
+    # document cold has nothing else to go on.
+    for sign, meaning in (
+        (OMITTED_MARK,
+         " means this witness writes no shad between the two pādas. This is "
+         "the omission, and the folio beside it is where to find it in that "
+         "witness."),
+        ("//  or  / /",
+         " is the shad as this witness writes it, spaced or closed up. It "
+         "marks the boundary, and so confirms that a boundary belongs here."),
+        ("—",
+         " means this witness reads differently at this point, so there is no "
+         "matching junction in it to compare. It is not an omission and is "
+         "not counted as one."),
+    ):
+        p = doc.add_paragraph()
+        run = p.add_run(sign)
+        run.bold = True
+        p.add_run(meaning)
     st_cols = 2 + len(labels)
     site_table = doc.add_table(rows=1, cols=st_cols)
     hdr = site_table.rows[0].cells
