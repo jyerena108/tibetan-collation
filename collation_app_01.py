@@ -1581,8 +1581,15 @@ def _junction_in(text, left_tail, right_head):
         sylls.append(m.group(0)); spans.append((m.start(), m.end()))
     want = list(left_tail) + list(right_head)
     n = len(left_tail)
+    # One syllable of the window may differ. Witnesses vary in small ways at
+    # exactly these points — GX1 reads "skyes 'gyur bar" where AB1 and DX1
+    # read "skye 'gyur bar" — and on an exact match a witness that plainly
+    # writes the boundary is reported as not having the passage at all.
+    # Two or more differences mean a real variant reading, and then there is
+    # genuinely no matching junction to compare.
     for i in range(len(sylls) - len(want) + 1):
-        if sylls[i:i + len(want)] == want:
+        window = sylls[i:i + len(want)]
+        if sum(1 for a, b in zip(window, want) if a != b) <= 1:
             gap = clean[spans[i + n - 1][1]:spans[i + n][0]]
             folio = ""
             for pos, mk in marks:
@@ -1901,6 +1908,12 @@ def add_orthographic_profile(doc, texts, labels, cells=None):
         "boundary the others all mark is certainly a boundary, so the omission "
         "is that witness's and can be corrected. One none of them marks is a "
         "shared reading, and there is nothing to correct."
+    )
+    doc.add_paragraph(
+        "Each witness's shad is shown as it writes it, and the folio is that "
+        "witness's own. A dash means the witness reads differently at this "
+        "point, so there is no matching junction in it to compare — not that "
+        "it omits anything, and it is not counted as an omission."
     )
     st_cols = 2 + len(labels)
     site_table = doc.add_table(rows=1, cols=st_cols)
