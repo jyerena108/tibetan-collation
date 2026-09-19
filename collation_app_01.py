@@ -1296,6 +1296,42 @@ def _verse_segments(text):
     return [(w, sh, sp, e) for w, sh, sp, e in out if w]
 
 
+# Tibetan writes ONE shad after a syllable ending in ga or ka: the letter's
+# own descender already reads as one, so a second would be redundant. It is a
+# punctuation rule, not a weaker boundary — the pada closes exactly as firmly.
+#
+# In these four witnesses only 3% of segments ending in ga close with a double
+# shad, against 62-95% for every other final. Note that Wylie "ng" is nga, a
+# different letter entirely, and behaves normally at 62%; "gs" ends in sa and
+# sits at 95%. Without this a pada ending in ga counts as unmarked, and a
+# passage containing one can fail the double-shad test altogether — which is
+# how "…bstan par rig/" dropped out of the verse.
+_GA_FINAL_RE = re.compile(r"(?:(?<!n)g|k)$")
+_GA_FINAL_T = ("\u0f42", "\u0f40")      # ག  ཀ
+
+
+def _closes_with_single_shad(text):
+    """Is this a syllable that Tibetan punctuates with one shad, not two?"""
+    words = _verse_syllables(text)
+    if not words:
+        return False
+    last = words[-1].rstrip("'\u0f60")
+    if not last:
+        return False
+    if _TIBETAN_CHAR_RE.search(last):
+        return last[-1] in _GA_FINAL_T
+    return bool(_GA_FINAL_RE.search(last))
+
+
+def _marks_pada_end(line):
+    """Does this line close as a pada does — a double shad, or the single one
+    that ga and ka take?"""
+    shad = line.shad.strip()
+    if len(shad) >= 2:
+        return True
+    return bool(shad) and _closes_with_single_shad(line.text)
+
+
 def _verse_lines_at(segs, i, metre, tibetan):
     """Build lines of `metre` syllables from segs[i:], joining only.
 
@@ -1448,7 +1484,7 @@ def verse_blocks(text):
             need = VERSE_MIN_RUN if m in VERSE_METRES else VERSE_MIN_RUN_UNUSUAL
             if len(lines) < need:
                 continue
-            doubled = sum(1 for l in lines if len(l.shad) >= 2)
+            doubled = sum(1 for l in lines if _marks_pada_end(l))
             if doubled * 2 < len(lines):
                 continue
             found = (lines, j, m)
