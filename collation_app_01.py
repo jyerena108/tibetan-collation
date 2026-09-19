@@ -1532,8 +1532,17 @@ def golden_layout(text, stanza=VERSE_STANZA):
             continue                       # inside verse; already broken
         if words and words[-1] in finals:
             breaks.append((end, "para"))
-    breaks.sort()
-    return breaks, spans
+    # Carry each break past whatever blank follows the shad, so a line opens
+    # on real text. Wylie writes an explicit space as "_", and a source that
+    # ends a line with "pa//_" would otherwise start the next pada with a
+    # stranded underscore.
+    blank = re.compile(r"[\s_]+")
+    moved = []
+    for at, kind in breaks:
+        m = blank.match(text, at)
+        moved.append(((m.end() if m else at), kind))
+    moved.sort()
+    return moved, spans
 
 
 def omitted_pada_shads(text):
@@ -2214,7 +2223,11 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
             # for falling outside both is how whole padas ran together.
             # kind 2 sorts after a footnote at the same spot, so the note
             # stays on its word and the break follows the shad.
-            inserts.append((max(0, at - cell_start), 2, kind))
+            # -1 so a break precedes a page marker standing at the same
+            # offset: the marker opens the new line rather than trailing the
+            # old one. A footnote always sits earlier than its pada's break,
+            # so it is never in contention here.
+            inserts.append((max(0, at - cell_start), -1, kind))
             bi += 1
 
         if place_note and seg:
