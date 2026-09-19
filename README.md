@@ -129,6 +129,40 @@ two spellings as one word. See [below](#orthography-versus-text).
 shad punctuation (`།`, `༎`, `༔`, and the Wylie `/`) are not reported. Turn it
 off to have them appear.
 
+**Lay out verse as verse** — off by default. In the golden text, each pāda of
+verse goes on its own line in stanzas of four, and prose breaks where a
+sentence actually ends rather than at every shad:
+
+```
+    de ni gzhan du bsod nams spyad pa'i mthus//
+    mi dbang rgya mtsho'i// mthar thug sa skyong ba//
+    mtshan gyi chad pa med cing bde bar gnas//
+    de'i 'bangs rnams phan tshun 'khrug pa med//
+
+    de'i rgyal phran brgyad khri bzhi stong po//
+    de dag rgyal po'i bka' lung spyi bos nod//
+```
+
+Tibetan verse is isosyllabic, so the pādas are found by **metre** — the
+syllable count the text itself uses, read off the text rather than assumed, so
+a work in a longer metre is found instead of walked past. A double shad marks
+where a pāda closes; a single one ends a prose clause just as readily, which is
+why breaking at every shad would shred the prose. Only the metre can tell them
+apart, and where a witness omits a shad inside a passage the pāda is still set
+on its own line.
+
+**Nothing is rewritten.** With this on, the golden text differs from your file
+in **whitespace only** — not a character removed, the mid-pāda shads included.
+What it discards is the file's own line wrapping, which is where the text
+happened to break in a PDF or a pecha rather than where it divides. Switch it
+off and the document is byte-identical to your file, exactly as before. The
+document says which it is, and every footnote stays on the word it belongs to.
+
+If no verse is found, the text is set as prose and the document says so rather
+than looking as though your text has none. That is what happens to a
+transcription which never distinguishes the double shad — there is nothing to
+find.
+
 **Add an orthographic profile** — off by default. Two tables that describe the
 witnesses rather than the text: they open the footnote document on a page of
 their own, and close the report.

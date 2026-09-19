@@ -1201,21 +1201,26 @@ def _write_cell(para, text, marks, shade):
 
 VERSE_METRES = (7, 9, 11)     # a 13 or 15 admits prose clauses as "verse"
 VERSE_MIN_RUN = 3             # fewer lines than this is not yet a passage
+VERSE_MIN_RUN_UNUSUAL = 5     # a metre outside the classical set must show more
 VERSE_TOL = 1                 # a pada may run a syllable over or short
 VERSE_MAX_SPLIT = 2           # one missing shad, not a run of them — see below
 _VERSE_SHADS = "\u0f0d\u0f0e\u0f0f\u0f10\u0f11\u0f14/|"
-_VERSE_SPLIT_RE = re.compile("([%s]+)" % re.escape(_VERSE_SHADS))
-_VERSE_SHAD_GAP_RE = re.compile(
-    "([%s])[\\s_]+(?=[%s])" % (re.escape(_VERSE_SHADS), re.escape(_VERSE_SHADS))
+# A separator is a run of shads, even where they are written apart: GX1 writes
+# the double shad as "/ /" and pecha-style Unicode as "\u0f0d    \u0f0d", and
+# read as two singles every pada boundary disappears. Matching the whole run
+# here keeps it one separator without deleting anything, so character
+# positions still line up with the text the document is built from.
+_VERSE_SPLIT_RE = re.compile(
+    "([%s](?:[\\s_]*[%s])*)" % (re.escape(_VERSE_SHADS), re.escape(_VERSE_SHADS))
 )
 _VERSE_SYL_RE = re.compile("[\u0f0b\u0f0c\s_]+")
 _VERSE_TAG_RE = re.compile(r"\[[^\[\]\n]*\]")
 
 # One line of verse: the reading, the shad that closes it, its syllable count,
 # and whether that shad had to be reconstructed because the witness omitted it.
-VerseLine = namedtuple("VerseLine", "text shad syllables reconstructed")
+VerseLine = namedtuple("VerseLine", "text shad syllables reconstructed end")
 # One passage: its lines, its metre, and the syllable offset it begins at.
-VerseBlock = namedtuple("VerseBlock", "lines metre at")
+VerseBlock = namedtuple("VerseBlock", "lines metre at start")
 
 
 def _verse_syllables(text):
@@ -1244,9 +1249,13 @@ def strip_page_tags(text):
         out.append(chunk)
         seen += len(_verse_syllables(chunk))
         marks.append((seen, m.group(0)))
+        # blanked, not removed: every character position in the result still
+        # matches the original, which is what lets a line break found here be
+        # placed in the text the document is built from
+        out.append(" " * (m.end() - m.start()))
         pos = m.end()
     out.append(text[pos:])
-    return " ".join(out), marks
+    return "".join(out), marks
 
 
 def _verse_measurable(text):
@@ -1260,26 +1269,31 @@ def _verse_measurable(text):
     """
     clean, marks = strip_page_tags(text)
     if _TIBETAN_CHAR_RE.search(clean):
-        clean = re.sub(r"[A-Za-z][A-Za-z0-9.,'\-]*", " ", clean)
+        clean = re.sub(r"[A-Za-z][A-Za-z0-9.,'\-]*",
+                       lambda m: " " * len(m.group(0)), clean)
     return clean, marks
 
 
 def _verse_segments(text):
     """Split at shads, each segment keeping the shad that closes it.
 
-    Shads written apart are closed up first: GX1 writes the double shad as
-    "/ /" and pecha-style Unicode writes it as "\u0f0d    \u0f0d", and left
-    apart every pada boundary reads as two singles instead of one double.
+    A run of shads counts as one separator even when written apart — see
+    _VERSE_SPLIT_RE — so "/ /" closes a pada exactly as "//" does.
     """
-    text = _VERSE_SHAD_GAP_RE.sub(r"\1", text)
-    out = []
+    out, pos = [], 0
     for piece in _VERSE_SPLIT_RE.split(text):
+        start = pos
+        pos += len(piece)
         if piece and piece[0] in _VERSE_SHADS:
             if out:
                 out[-1][1] = piece
+                out[-1][3] = pos          # just past the closing shad
         elif piece.strip():
-            out.append([_verse_syllables(piece), ""])
-    return [(w, sh) for w, sh in out if w]
+            spans = [(m.group(0), m.start() + start, m.end() + start)
+                     for m in re.finditer(
+                         r"[^\u0f0b\u0f0c\s_%s]+" % re.escape(_VERSE_SHADS), piece)]
+            out.append([[w for w, _a, _b in spans], "", spans, pos])
+    return [(w, sh, sp, e) for w, sh, sp, e in out if w]
 
 
 def _verse_lines_at(segs, i, metre, tibetan):
@@ -1297,7 +1311,8 @@ def _verse_lines_at(segs, i, metre, tibetan):
         if not buf or not (metre - VERSE_TOL <= n <= metre + VERSE_TOL):
             break
         words = [w for seg in buf for w in seg[0]]
-        lines.append(VerseLine(_verse_join(words, tibetan), buf[-1][1], n, False))
+        lines.append(VerseLine(_verse_join(words, tibetan), buf[-1][1], n,
+                               False, buf[-1][3]))
         k = j
     return lines, k
 
@@ -1328,7 +1343,7 @@ def _verse_extend_back(segs, start, metre, lines, tibetan, limit=0):
     """
     i = start
     while i > limit:
-        words, shad = segs[i - 1]
+        words, shad, spans, seg_end = segs[i - 1]
         n = len(words)
         parts = round(n / metre) if metre else 0
         # Only ever two. A segment of nine times the metre is not nine padas
@@ -1340,14 +1355,19 @@ def _verse_extend_back(segs, start, metre, lines, tibetan, limit=0):
                 _verse_metrical_before(segs, i - 1, metre):
             made = []
             for p in range(parts):
-                chunk = words[p * metre:(p + 1) * metre]
+                lo, hi = p * metre, (p + 1) * metre
+                chunk = words[lo:hi]
+                # an interior boundary ends at the last word of its chunk;
+                # only the final piece reaches past the closing shad
+                end = seg_end if p == parts - 1 else spans[hi - 1][2]
                 made.append(VerseLine(_verse_join(chunk, tibetan), shad, metre,
-                                      p < parts - 1))
+                                      p < parts - 1, end))
             lines[:0] = made
             i -= 1
             continue
         if metre - VERSE_TOL <= n <= metre + VERSE_TOL:
-            lines.insert(0, VerseLine(_verse_join(words, tibetan), shad, n, False))
+            lines.insert(0, VerseLine(_verse_join(words, tibetan), shad, n,
+                                      False, seg_end))
             i -= 1
             continue
         if i - 2 >= limit:
@@ -1355,7 +1375,7 @@ def _verse_extend_back(segs, start, metre, lines, tibetan, limit=0):
             m = len(prev) + n
             if metre - VERSE_TOL <= m <= metre + VERSE_TOL:
                 lines.insert(0, VerseLine(_verse_join(prev + words, tibetan),
-                                          shad, m, False))
+                                          shad, m, False, seg_end))
                 i -= 2
                 continue
         break
@@ -1373,18 +1393,21 @@ def _verse_extend_on(segs, stop, metre, lines, tibetan):
     """
     i = stop
     while i < len(segs):
-        words, shad = segs[i]
+        words, shad, spans, seg_end = segs[i]
         n = len(words)
         parts = round(n / metre) if metre else 0
         if 2 <= parts <= VERSE_MAX_SPLIT and n == parts * metre:
             for p in range(parts):
-                chunk = words[p * metre:(p + 1) * metre]
+                lo, hi = p * metre, (p + 1) * metre
+                chunk = words[lo:hi]
+                end = seg_end if p == parts - 1 else spans[hi - 1][2]
                 lines.append(VerseLine(_verse_join(chunk, tibetan), shad, metre,
-                                       p < parts - 1))
+                                       p < parts - 1, end))
             i += 1
             continue
         if metre - VERSE_TOL <= n <= metre + VERSE_TOL:
-            lines.append(VerseLine(_verse_join(words, tibetan), shad, n, False))
+            lines.append(VerseLine(_verse_join(words, tibetan), shad, n,
+                                   False, seg_end))
             i += 1
             continue
         break
@@ -1393,6 +1416,9 @@ def _verse_extend_on(segs, stop, metre, lines, tibetan):
 
 def verse_blocks(text):
     """Every verse passage in a text, as VerseBlock records.
+
+    The metres are read off the text itself rather than assumed, so a
+    translation in a longer metre is found instead of walked past.
 
     A passage is a run of at least VERSE_MIN_RUN metrical lines most of which
     close with a double shad. That last test is what keeps prose out: verse
@@ -1404,16 +1430,23 @@ def verse_blocks(text):
     """
     tibetan = bool(_TIBETAN_CHAR_RE.search(text))
     clean, _marks = _verse_measurable(text)
+    metres = derive_metres(text)
     segs = _verse_segments(clean)
     starts, seen = [], 0
-    for words, _sh in segs:
+    for words, _sh, _sp, _e in segs:
         starts.append(seen); seen += len(words)
     blocks, i, run = [], 0, 0
     while i < len(segs):
         found = None
-        for m in VERSE_METRES:      # ascending: a 15 would eat two sevens
+        for m in metres:            # ascending: a 15 would eat two sevens
             lines, j = _verse_lines_at(segs, i, m, tibetan)
-            if len(lines) < VERSE_MIN_RUN:
+            # 7, 9 and 11 are the expected lengths and three lines settle
+            # them. A length the text merely happens to use often has to show
+            # more: a prose-heavy work puts a common clause length at the top
+            # of the derived list, and four such clauses in a row are easy to
+            # come by — BX1 has exactly one such run at fifteen.
+            need = VERSE_MIN_RUN if m in VERSE_METRES else VERSE_MIN_RUN_UNUSUAL
+            if len(lines) < need:
                 continue
             doubled = sum(1 for l in lines if len(l.shad) >= 2)
             if doubled * 2 < len(lines):
@@ -1424,11 +1457,83 @@ def verse_blocks(text):
             lines, j, m = found
             back = _verse_extend_back(segs, i, m, lines, tibetan, limit=run)
             j = _verse_extend_on(segs, j, m, lines, tibetan)
-            blocks.append(VerseBlock(lines, m, starts[back]))
+            blocks.append(VerseBlock(lines, m, starts[back],
+                                     segs[back][2][0][1]))
             i = run = j
         else:
             i += 1
     return blocks
+
+
+VERSE_STANZA = 4              # padas to a stanza; see golden_layout
+VERSE_METRE_SHARE = 0.10      # a metre must hold a tenth of the closes
+
+
+def derive_metres(text):
+    """The metres a text actually uses, commonest first.
+
+    Reading them off the text rather than assuming 7/9/11 is what lets a
+    translation in a longer metre be found at all: a run of clean 15-syllable
+    padas is invisible to a detector that only ever tries three lengths.
+    Only runs closed by a double shad are counted, since a single shad ends a
+    prose clause just as readily and would put every prose length in the list.
+    """
+    clean, _marks = _verse_measurable(text)
+    lengths, total = {}, 0
+    for words, shad, _spans, _end in _verse_segments(clean):
+        if len(shad.strip()) >= 2:
+            lengths[len(words)] = lengths.get(len(words), 0) + 1
+            total += 1
+    if not total:
+        return VERSE_METRES
+    # A real metre dominates; noise does not. In these witnesses 7 and 9 take
+    # 26-76% of the double-shad segments each while every other length sits
+    # under 8%, so a tenth of the total separates them cleanly — and a text
+    # written mostly in a longer metre puts that metre at the top instead.
+    floor = max(VERSE_MIN_RUN, total * VERSE_METRE_SHARE)
+    good = [(n, c) for n, c in lengths.items() if 5 <= n <= 25 and c >= floor]
+    good.sort(key=lambda x: -x[1])
+    # Union with the classical lengths rather than replacing them. A metre
+    # this text uses rarely — GX1 closes only 5 segments at eleven — falls
+    # under the floor but is still worth trying, and the shortest-first order
+    # means a longer metre is never reached by a shorter one anyway.
+    return tuple(sorted(set(n for n, _c in good[:4]) | set(VERSE_METRES)))
+
+
+def golden_layout(text, stanza=VERSE_STANZA):
+    """Where to break the reading text, as ``(offset, kind)`` pairs.
+
+    ``kind`` is "line" for a pada, "stanza" for the last pada of a stanza, and
+    "para" for the end of a prose sentence. Offsets are into ``text`` itself,
+    so the document can break exactly there.
+
+    Prose is broken only at a sentence-final particle — ngo, to, do, so, go,
+    'o — because a shad marks a pause of any weight and breaking at every one
+    would chop the prose into clauses.
+    """
+    blocks = verse_blocks(text)
+    clean, _marks = _verse_measurable(text)
+    tibetan = bool(_TIBETAN_CHAR_RE.search(text))
+    finals = _FINAL_T if tibetan else _FINAL_W
+    spans = [(b.start, b.lines[-1].end) for b in blocks]
+
+    breaks = []
+    for b in blocks:
+        if b.start > 0:
+            # the passage opens a line of its own; without this its first
+            # pada sits at the end of the prose paragraph above it
+            breaks.append((b.start, "open"))
+        for n, line in enumerate(b.lines):
+            last = n + 1 == len(b.lines)
+            at_stanza = (n + 1) % stanza == 0 and not last
+            breaks.append((line.end, "stanza" if at_stanza else "line"))
+    for words, shad, _sp, end in _verse_segments(clean):
+        if any(lo <= end <= hi for lo, hi in spans):
+            continue                       # inside verse; already broken
+        if words and words[-1] in finals:
+            breaks.append((end, "para"))
+    breaks.sort()
+    return breaks, spans
 
 
 def omitted_pada_shads(text):
@@ -1546,6 +1651,9 @@ _STACK_WORD_RE = re.compile(r"[A-Za-z']*\+[A-Za-z']*")
 _UNI_HEAD_MARKS = "༄༅༆༇༈"
 _UNI_SHAD = "།༎༏༐༑༔"
 _NB_TSHEG = "༌"
+
+_FINAL_W = {"ngo", "to", "do", "so", "go", "'o", "no", "bo", "mo", "ro", "lo"}
+_FINAL_T = {"ངོ", "ཏོ", "དོ", "སོ", "གོ", "འོ", "ནོ", "བོ", "མོ", "རོ", "ལོ"}
 
 _OMITTED_PADA_ROW = "Pāda-final shads omitted"
 
@@ -1957,9 +2065,18 @@ def export_versions_document(texts, labels, patterns=None):
     return buf
 
 
+def _style_verse_line(p):
+    """A pada sits on its own line, indented, with its stanza-mates close."""
+    fmt = p.paragraph_format
+    fmt.left_indent = Inches(0.35)
+    fmt.space_after = Pt(0)
+    fmt.space_before = Pt(0)
+    return p
+
+
 def export_golden_with_footnotes(cells, notes, labels, name1="base",
                                  milestones=None, ignore_shad=True,
-                                 profile_texts=None):
+                                 profile_texts=None, verse_layout=False):
     """Golden text with variant footnotes.
 
     ``cells`` is the very list the report was built from, so footnote numbering
@@ -1980,9 +2097,48 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
     ms_index = 0  # next milestone still to be emitted
     char_pos = 0  # running offset into the (concatenated) base text
 
+    # Where the reading text should break, if verse is to be set as verse.
+    # Computed over the same concatenation the cells are emitted from, so an
+    # offset here is the offset the document writes at.
+    base_text = "".join(c.segs[0] for c in cells)
+    breaks, verse_spans, verse_note = ([], [], "")
+    if verse_layout:
+        breaks, verse_spans = golden_layout(base_text)
+        blocks = verse_blocks(base_text)
+        if blocks:
+            metres = sorted({b.metre for b in blocks})
+            padas = sum(len(b.lines) for b in blocks)
+            verse_note = (
+                "Verse set one pāda per line, in stanzas of %d: %d passages, "
+                "%d pādas, %s syllables. The file's own line breaks are "
+                "discarded as the wrapping they are; not a character of the "
+                "text is altered." % (
+                    VERSE_STANZA, len(blocks), padas,
+                    ", ".join(str(m) for m in metres[:-1]) + " and " + str(metres[-1])
+                    if len(metres) > 1 else str(metres[0]))
+            )
+        else:
+            # Silence here would read as "this text has no verse", which is
+            # not what was found — nothing could be looked for.
+            verse_note = (
+                "No verse found, so the text is set as prose. Pāda boundaries "
+                "are located by the double shad; a transcription that does not "
+                "distinguish it from the single shad gives nothing to find."
+            )
+
+    def in_verse(at):
+        return any(lo <= at < hi for lo, hi in verse_spans)
+
     def emit(p, text):
-        """Write base text, splicing in any milestone tags it spans."""
+        """Write base text, splicing in any milestone tags it spans.
+
+        With verse_layout on, the source's own line breaks are dropped: they
+        are where the file happened to wrap, not where the text divides, and
+        left in they cut across the padas being set.
+        """
         nonlocal ms_index, char_pos
+        if verse_layout:
+            text = text.replace("\r", " ").replace("\n", " ")
         start = 0
         end_pos = char_pos + len(text)
         while ms_index < len(milestones) and milestones[ms_index][0] < end_pos:
@@ -2004,6 +2160,11 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
     else:
         others = labels[1]
     doc.add_paragraph(f"Base: {name1}  |  Footnotes from comparison with {others}.")
+    if verse_note:
+        note_p = doc.add_paragraph()
+        note_run = note_p.add_run(verse_note)
+        note_run.italic = True
+        note_run.font.size = Pt(9)
 
     if profile_texts:
         # Front matter: the profile describes the witnesses, so it belongs
@@ -2019,7 +2180,20 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
         doc.add_paragraph()
 
     p_text = doc.add_paragraph()
+    if verse_layout and verse_spans and in_verse(0):
+        _style_verse_line(p_text)
 
+    def start_line(kind, at):
+        """Close the current paragraph and open the next one."""
+        nonlocal p_text
+        if kind == "stanza":
+            gap = doc.add_paragraph()
+            gap.paragraph_format.space_after = Pt(0)
+        p_text = doc.add_paragraph()
+        if in_verse(at):
+            _style_verse_line(p_text)
+
+    bi = 0
     note_index = 0
     for cell in cells:
         seg = cell.segs[0]
@@ -2029,8 +2203,19 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
         place_note = note_start_here and 1 <= note_index <= len(notes)
 
         # Everything that has to be spliced into this cell's base text, by
-        # position: each witness's page markers, and the footnote reference.
+        # position: each witness's page markers, the footnote reference, and
+        # any line break the layout puts inside this cell.
         inserts = [(pm.base_at, 0, pm.text) for pm in cell.page_marks]
+        cell_start = char_pos
+        while bi < len(breaks) and breaks[bi][0] <= cell_start + len(seg):
+            at, kind = breaks[bi]
+            # A break landing exactly on a cell boundary belongs to whichever
+            # cell reaches it first, at offset 0 of the next one — dropping it
+            # for falling outside both is how whole padas ran together.
+            # kind 2 sorts after a footnote at the same spot, so the note
+            # stays on its word and the break follows the shad.
+            inserts.append((max(0, at - cell_start), 2, kind))
+            bi += 1
 
         if place_note and seg:
             # Put the reference mark right after the annotated word, before any
@@ -2078,8 +2263,10 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
             if kind == 0:
                 mark_run = p_text.add_run(payload)
                 mark_run.italic = True
-            else:
+            elif kind == 1:
                 p_text.add_footnote(notes[note_index - 1])
+            else:
+                start_line(payload, cell_start + at)
         if pos < len(seg):
             emit(p_text, seg[pos:])
 
@@ -2349,6 +2536,19 @@ ignore_shad = st.checkbox(
     "differences show up in the apparatus.",
 )
 
+want_verse = st.checkbox(
+    "Lay out verse as verse",
+    value=False,
+    key="wantverse",
+    help="In the golden text, set each pāda of verse on its own line in "
+    "stanzas of four, and break prose where a sentence actually ends. "
+    "Pādas are found by metre — the syllable count the text itself uses — "
+    "with the double shad marking where one closes, so a transcription that "
+    "does not distinguish it from the single shad has nothing to find and "
+    "the document says so. Nothing is rewritten: with this on the golden "
+    "text differs from your file in whitespace only.",
+)
+
 want_profile = st.checkbox(
     "Add an orthographic profile",
     value=False,
@@ -2611,8 +2811,23 @@ if run_btn and ready:
             footnote_buf = export_golden_with_footnotes(
                 cells, notes, labels, name1=names[0],
                 milestones=golden_milestones, ignore_shad=ignore_shad,
-                profile_texts=profile_texts,
+                profile_texts=profile_texts, verse_layout=want_verse,
             )
+        if want_verse:
+            _blocks = verse_blocks("".join(c.segs[0] for c in cells))
+            if _blocks:
+                st.caption(
+                    "Verse: %d passages, %d pādas, %s syllables."
+                    % (len(_blocks), sum(len(b.lines) for b in _blocks),
+                       " and ".join(str(m) for m in sorted({b.metre for b in _blocks})))
+                )
+            else:
+                st.warning(
+                    "⚠️ No verse found, so the golden text is set as prose. "
+                    "Pāda boundaries are located by the double shad — if this "
+                    "text writes every shad as a single one, there is nothing "
+                    "to find."
+                )
     except AttributeError:
         st.warning(
             "⚠️ Footnote document skipped — `add_footnote` not available. "
