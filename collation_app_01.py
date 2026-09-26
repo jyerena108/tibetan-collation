@@ -28,7 +28,8 @@ from pathlib import Path
 import streamlit as st
 from docx import Document
 from docx.shared import Inches, Mm, Pt
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+from docx.enum.text import (WD_ALIGN_PARAGRAPH, WD_LINE_SPACING,
+                            WD_COLOR_INDEX)
 from docx.enum.section import WD_ORIENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -1267,6 +1268,53 @@ def normalize_wylie(text):
     return re.sub(r"(?m)^[ \t]+", "", text)
 
 
+# ── Places to check against the original ────────────────────────────
+# Two things the tool can see but cannot settle, so it marks them instead of
+# deciding: a run of three or more shads, and a shad whose spacing did not
+# follow the convention in the source.
+#
+# Neither is an error. Three shads often close a story, and irregular spacing
+# is as likely to be the scribe as the scanner. Only the original page can
+# say, and this is what says where to look.
+
+CHECK_MIN_SHADS = 3            # a run this long is worth a second look
+CHECK_YELLOW = "yellow"        # what the highlight is called, for the caption
+_CHECK_RUN_RE = re.compile(r"[/|](?:[ \t]*[/|]){%d,}" % (CHECK_MIN_SHADS - 1))
+_CHECK_SPACING_RE = re.compile(r"([A-Za-z\u2019']+)([ \t]*)([/|]+)")
+
+CheckSite = namedtuple("CheckSite", "start end reason")
+
+
+def check_sites(text):
+    """Where a reader should compare this text against the original.
+
+    Returns CheckSite records with offsets into ``text``. Two reasons:
+
+    - "shads": three or more shads together. Often the close of a story and
+      perfectly correct, sometimes the scanner seeing one mark as two. The
+      tool has no way to tell, and guessing would destroy the distinction.
+    - "spacing": a shad whose space did not match the convention — a space
+      where Tibetan writes none, or none after the letter nga where Tibetan
+      writes a tsheg. Tidying puts it right in the output, but what the
+      source actually had is worth a look.
+    """
+    sites = []
+    for m in _CHECK_RUN_RE.finditer(text):
+        sites.append(CheckSite(m.start(), m.end(), "shads"))
+    taken = [(s.start, s.end) for s in sites]
+    for m in _CHECK_SPACING_RE.finditer(text):
+        word, gap, _shads = m.group(1), m.group(2), m.group(3)
+        wants = " " if _ends_in_nga(word) else ""
+        if gap == wants:
+            continue
+        a, b = m.start(1), m.end(3)
+        if any(a < hi and lo < b for lo, hi in taken):
+            continue          # already marked as a run of shads
+        sites.append(CheckSite(a, b, "spacing"))
+    sites.sort()
+    return sites
+
+
 # ── Verse structure ──────────────────────────────────────────────────
 # Tibetan verse is isosyllabic: every pada of a passage carries the same
 # syllable count, and a shad closes each one. That makes the boundaries
@@ -1968,6 +2016,39 @@ def stacked_form_rows(cells, ignore_shad=True):
     return [(r, counts[r]) for r in order]
 
 
+CHECK_REASONS = (
+    ("shads", "Three or more shads together"),
+    ("spacing", "Space at a shad against the convention"),
+)
+
+
+def check_rows(texts, labels):
+    """Per witness, where to check against the original and how often.
+
+    Returns ``(counts, sites)``: counts as ``[(reason_label, [n…])…]`` in the
+    shape the profile's other tables use, and sites as
+    ``(label, folio, reason_label, passage)`` rows for the list beneath it.
+    """
+    counts = {r: [0] * len(labels) for r, _name in CHECK_REASONS}
+    sites = []
+    for i, (label, text) in enumerate(zip(labels, texts)):
+        _clean, marks = strip_page_tags(text)
+        for site in check_sites(text):
+            counts[site.reason][i] += 1
+            folio, seen = "", 0
+            for pos, mk in marks:
+                # marks are counted in syllables; a rough seek is enough to
+                # name the page, and naming it is the point
+                if pos <= len(_verse_syllables(text[:site.start])):
+                    folio = mk
+            passage = re.sub(r"\s+", " ",
+                             text[max(0, site.start - 24):site.end + 16]).strip()
+            name = dict(CHECK_REASONS)[site.reason]
+            sites.append((label, folio, name, passage))
+    rows = [(name, counts[r]) for r, name in CHECK_REASONS if any(counts[r])]
+    return rows, sites
+
+
 def add_orthographic_profile(doc, texts, labels, cells=None):
     """Append the profile, and the stacked-form comparison, to the report."""
     rows, _stacked = orthographic_profile(texts, labels)
@@ -2082,6 +2163,44 @@ def add_orthographic_profile(doc, texts, labels, cells=None):
             else:
                 cell.add_run(sep)
     _style_table(site_table, numeric_from=st_cols)
+
+    rows, sites = check_rows(texts, labels)
+    if not rows:
+        return
+
+    doc.add_paragraph()
+    doc.add_heading("Check against the original", level=2)
+    doc.add_paragraph(
+        "Places the tool can see but cannot settle, marked in yellow in the "
+        "reading text. Neither is an error in itself: three shads together "
+        "often close a story, and spacing that departs from the convention is "
+        "as likely to be the scribe as the scanner. Only the original page "
+        "can say, and this is where to look."
+    )
+    ck = doc.add_table(rows=1, cols=len(labels) + 1)
+    hdr = ck.rows[0].cells
+    hdr[0].paragraphs[0].add_run("")
+    for i, label in enumerate(labels):
+        hdr[i + 1].paragraphs[0].add_run(label)
+    for name, counts in rows:
+        cs = ck.add_row().cells
+        cs[0].paragraphs[0].add_run(name)
+        for i, n in enumerate(counts):
+            cs[i + 1].paragraphs[0].add_run(str(n))
+    _style_table(ck)
+
+    if sites:
+        doc.add_paragraph()
+        lst = doc.add_table(rows=1, cols=4)
+        for i, head in enumerate(("Witness", "Folio", "What", "Passage")):
+            lst.rows[0].cells[i].paragraphs[0].add_run(head)
+        for label, folio, name, passage in sites:
+            cs = lst.add_row().cells
+            cs[0].paragraphs[0].add_run(label)
+            cs[1].paragraphs[0].add_run(folio or "\u2014")
+            cs[2].paragraphs[0].add_run(name)
+            cs[3].paragraphs[0].add_run(passage)
+        _style_table(lst, numeric_from=4)
 
 
 def export_collation_report(cells, labels, names, profile_texts=None):
@@ -2276,7 +2395,8 @@ def _style_verse_line(p):
 
 def export_golden_with_footnotes(cells, notes, labels, name1="base",
                                  milestones=None, ignore_shad=True,
-                                 profile_texts=None, verse_layout=False):
+                                 profile_texts=None, verse_layout=False,
+                                 flag_checks=True):
     """Golden text with variant footnotes.
 
     ``cells`` is the very list the report was built from, so footnote numbering
@@ -2302,6 +2422,25 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
     # Computed over the same concatenation the cells are emitted from, so an
     # offset here is the offset the document writes at.
     base_text = "".join(c.segs[0] for c in cells)
+    # Spans the reader should compare against the original, marked in yellow
+    # rather than corrected — the tool can see them but cannot settle them.
+    check_spans = [(x.start, x.end) for x in check_sites(base_text)] if flag_checks else []
+
+    def write(p, text, at):
+        """Write base text, highlighting whatever falls in a flagged span."""
+        pos = 0
+        while pos < len(text):
+            here = at + pos
+            inside = next((sp for sp in check_spans if sp[0] <= here < sp[1]), None)
+            if inside:
+                stop = min(len(text), inside[1] - at)
+                run = p.add_run(text[pos:stop])
+                run.font.highlight_color = WD_COLOR_INDEX.YELLOW
+            else:
+                nxt = min((sp[0] for sp in check_spans if sp[0] > here), default=None)
+                stop = len(text) if nxt is None else min(len(text), nxt - at)
+                p.add_run(text[pos:stop])
+            pos = max(stop, pos + 1)
     breaks, verse_spans, verse_note = ([], [], "")
     if verse_layout:
         breaks, verse_spans = golden_layout(base_text)
@@ -2351,13 +2490,13 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
         while ms_index < len(milestones) and milestones[ms_index][0] < end_pos:
             cut = milestones[ms_index][0] - char_pos
             if cut > start:
-                p.add_run(text[start:cut])
+                write(p, text[start:cut], char_pos + start)
             tag_run = p.add_run(milestones[ms_index][1])
             tag_run.italic = True
             start = cut
             ms_index += 1
         if start < len(text):
-            p.add_run(text[start:])
+            write(p, text[start:], char_pos + start)
         char_pos = end_pos
 
     doc = Document()

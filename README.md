@@ -287,6 +287,20 @@ lines end in a double 87–93% of the time across these witnesses and prose
 segments only 27–52%, so without that distinction there is nothing to measure,
 and a zero there would claim the witness omits nothing.
 
+**Places to check against the original** are marked in **yellow** in the
+golden text, and listed in a third section of the profile with the folio each
+falls on. Two things are flagged:
+
+| What | Why it is flagged rather than fixed |
+|---|---|
+| Three or more shads together | Often the close of a story, sometimes the scanner reading one mark as two. Only the page can say |
+| A shad whose spacing departs from the convention | As likely the scribe as the scanner — and it is how `seng/ ge'i` turned up in BX1, a shad sitting inside a word |
+
+Nothing here is an error in itself, which is why the tool marks it and leaves
+it. The report's columns are not highlighted: they already use background
+colour to mark variants, and a second colour there would read as a third
+thing.
+
 **The table follows the script your texts are in.** Wylie witnesses are
 labelled in Wylie, exactly as above. Unicode Tibetan witnesses are labelled in
 Tibetan — `Head marks  ༄༅`, `Shad  །` — and gain a row for the non-breaking
