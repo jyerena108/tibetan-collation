@@ -2137,6 +2137,42 @@ def export_versions_document(texts, labels, patterns=None):
     return buf
 
 
+def _merge_page_marks(marks):
+    """Markers standing at the same point in the reading text become one
+    bracket, separated by "; ".
+
+    Four witnesses turning a page at the same word produced four brackets in a
+    row — "[BX1.1v.1][AB1.272][DX1.145r.1][GX1.158v.1]" — which is a wall to
+    read. Merged it is "[BX1.1v.1; AB1.272; DX1.145r.1; GX1.158v.1]".
+
+    Only the brackets are merged. What is inside each marker is left exactly
+    as its own source wrote it: that form is the editor's choice, made once in
+    the file, and not the tool's to normalise.
+
+    Returns ``[(base_at, text)…]`` ready to splice into the reading text. The
+    caller adds the space that follows the closing bracket, since only it can
+    see whether the text already has one there.
+    """
+    out, i = [], 0
+    while i < len(marks):
+        j = i
+        while j + 1 < len(marks) and marks[j + 1].base_at == marks[i].base_at:
+            j += 1
+        group = marks[i:j + 1]
+        if len(group) == 1:
+            out.append((group[0].base_at, group[0].text))
+        else:
+            inner = []
+            for m in group:
+                t = m.text.strip()
+                if t.startswith("[") and t.endswith("]"):
+                    t = t[1:-1].strip()
+                inner.append(t)
+            out.append((group[0].base_at, "[" + "; ".join(inner) + "]"))
+        i = j + 1
+    return out
+
+
 def _style_verse_line(p):
     """A pada sits on its own line, indented, with its stanza-mates close."""
     fmt = p.paragraph_format
@@ -2168,6 +2204,7 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
     milestones = sorted(milestones) if milestones else []
     ms_index = 0  # next milestone still to be emitted
     char_pos = 0  # running offset into the (concatenated) base text
+    pending_space = False  # a page marker is waiting for the space after it
 
     # Where the reading text should break, if verse is to be set as verse.
     # Computed over the same concatenation the cells are emitted from, so an
@@ -2208,7 +2245,13 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
         are where the file happened to wrap, not where the text divides, and
         left in they cut across the padas being set.
         """
-        nonlocal ms_index, char_pos
+        nonlocal ms_index, char_pos, pending_space
+        if pending_space:
+            # the space owed to a page marker written at the end of the last
+            # cell, which could not see what followed it
+            if text and not text[0].isspace():
+                p.add_run(" ")
+            pending_space = False
         if verse_layout:
             text = text.replace("\r", " ").replace("\n", " ")
         start = 0
@@ -2277,7 +2320,8 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
         # Everything that has to be spliced into this cell's base text, by
         # position: each witness's page markers, the footnote reference, and
         # any line break the layout puts inside this cell.
-        inserts = [(pm.base_at, 0, pm.text) for pm in cell.page_marks]
+        inserts = [(at, 0, text)
+                   for at, text in _merge_page_marks(cell.page_marks)]
         cell_start = char_pos
         while bi < len(breaks) and breaks[bi][0] <= cell_start + len(seg):
             at, kind = breaks[bi]
@@ -2339,6 +2383,12 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
             if kind == 0:
                 mark_run = p_text.add_run(payload)
                 mark_run.italic = True
+                # A space follows the closing bracket so the marker does not
+                # run into the word it precedes. The next character is often
+                # in the next cell, so the intent is carried and spent by
+                # whichever emit comes first — and skipped if the text
+                # already has whitespace there, so none is doubled.
+                pending_space = True
             elif kind == 1:
                 p_text.add_footnote(notes[note_index - 1])
             else:
