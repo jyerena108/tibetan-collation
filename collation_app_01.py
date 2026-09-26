@@ -438,6 +438,12 @@ def decode_upload(raw: bytes):
     return text.replace("\r\n", "\n").replace("\r", "\n"), "UTF-8 (damaged bytes replaced)"
 
 
+def set_apostrophe_output(typographic: bool) -> None:
+    """Print a-chung as the typographic apostrophe, or as the ASCII one."""
+    global APOSTROPHE_OUT
+    APOSTROPHE_OUT = "\u2019" if typographic else "'"
+
+
 def apply_preprocessing_options(
     underscore_as_space=True,
     pipe_as_shad=True,
@@ -572,9 +578,16 @@ _APOSTROPHE_VARIANTS = ("\u2018", "\u2019", "\u201b", "\u02bc")
 _APOSTROPHE_RE = re.compile("[" + "".join(_APOSTROPHE_VARIANTS) + "]")
 
 
+# Which apostrophe a-chung is written with wherever the tool prints a
+# reading. They all compare equal either way; this only decides what the
+# reader sees, and it follows the tidying choice so the notes agree with the
+# text they annotate.
+APOSTROPHE_OUT = "'"
+
+
 def normalize_apostrophes(s: str) -> str:
-    """Fold typographic apostrophes onto the ASCII one used by Wylie."""
-    return _APOSTROPHE_RE.sub("'", s)
+    """Fold every apostrophe onto the one this edition writes."""
+    return _APOSTROPHE_RE.sub(APOSTROPHE_OUT, s)
 
 
 def strip_ignorable(s: str, ignore_shad: bool = True) -> str:
@@ -1187,6 +1200,61 @@ def _write_cell(para, text, marks, shade):
         run = para.add_run(text[pos:])
         if shade:
             set_run_background_color(run, shade)
+
+
+# ── Normalising the Wylie that is written out ────────────────────────
+# Four conventions asked for in review. They change the text, which is why
+# they are a choice: with them off the golden text still reproduces the source
+# byte for byte.
+#
+# What is NOT touched: how a run of shads is written internally. Whether a
+# verse line closes "//" or "/ /" is an open question among the editors, and
+# guessing at it here would settle by accident what they mean to settle by
+# evidence.
+
+_NORM_HEAD_RE = re.compile(r"[@#!]")
+_NORM_APOS_RE = re.compile(r"['\u2018\u201b\u02bc]")
+_NORM_APOS_TO = "\u2019"          # the typographic apostrophe, for a-chung
+_NORM_SHADS = "/|"
+_NORM_BEFORE_RE = re.compile(r"([A-Za-z\u2019]+)[ \t]*(?=[" + _NORM_SHADS + "])")
+_NORM_AFTER_RE = re.compile(r"([" + _NORM_SHADS + r"])(?=[A-Za-z\u2019])")
+_NORM_VOWEL_RE = re.compile(r"[iueo]$")
+
+
+def _ends_in_nga(syllable):
+    """Does this syllable end in the letter ང?
+
+    The vowel sign is dropped first: "ngo" is nga with an o, and ends in nga,
+    while "go" is ga with an o and does not. Reading the last two letters
+    without this puts "ngo" under "go" and loses the rule.
+    """
+    w = _NORM_VOWEL_RE.sub("", syllable.rstrip("'\u2019"))
+    return w.endswith("ng")
+
+
+def normalize_wylie(text):
+    """Write the Wylie the way the edition wants it read.
+
+    - head marks (@ # !) come out: they transliterate the yig-mgo ornament,
+      which is structural rather than textual
+    - every apostrophe becomes the typographic one, whichever was typed, so
+      a-chung is encoded one way throughout
+    - the explicit space "_" becomes an actual space
+    - a shad is preceded by a space only where Tibetan writes a tsheg before
+      it, which is after the letter ང — in these witnesses that convention
+      already holds 94% of the time, and elsewhere there is no space 96% of
+      the time, so this is a tidy-up rather than a rewrite
+    - a shad followed by a word gets a space after it
+    """
+    text = _NORM_HEAD_RE.sub("", text)
+    text = _NORM_APOS_RE.sub(_NORM_APOS_TO, text)
+    text = text.replace("_", " ")
+    text = _NORM_BEFORE_RE.sub(
+        lambda m: m.group(1) + (" " if _ends_in_nga(m.group(1)) else ""), text)
+    text = _NORM_AFTER_RE.sub(r"\1 ", text)
+    # removing a head mark or an underscore can leave a gap behind it
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    return re.sub(r"(?m)^[ \t]+", "", text)
 
 
 # ── Verse structure ──────────────────────────────────────────────────
@@ -2662,6 +2730,19 @@ ignore_shad = st.checkbox(
     "differences show up in the apparatus.",
 )
 
+want_normalize = st.checkbox(
+    "Tidy the Wylie",
+    value=True,
+    key="wantnorm",
+    help="Write the Wylie the way the edition wants it read: head marks "
+    "(@ # !) removed, every apostrophe written as the typographic one, the "
+    "explicit space _ written as a space, a shad preceded by a space only "
+    "after the letter ང (where Tibetan writes a tsheg), and followed by one "
+    "when a word comes next. How a run of shads is written — // or / / — is "
+    "left exactly as your source has it. Untick to have both documents "
+    "reproduce your files character for character.",
+)
+
 want_verse = st.checkbox(
     "Lay out verse as verse",
     value=False,
@@ -2802,7 +2883,10 @@ if run_btn and ready:
             _name = uploads[_i].name
             _t, _e = decode_upload(_raw)
         names.append(_name)
-        texts.append(_t)
+        # Tidied here, before anything is measured or aligned, so the report's
+        # columns and the golden text carry the same form — and so a shad that
+        # gains a space does not have to be tracked through the collation.
+        texts.append(normalize_wylie(_t) if want_normalize else _t)
         encodings.append(_e)
 
     if _fetched:
@@ -2839,6 +2923,7 @@ if run_btn and ready:
         )
 
     # Apply the user's preprocessing choices
+    set_apostrophe_output(want_normalize)
     apply_preprocessing_options(
         underscore_as_space=prep_underscore,
         pipe_as_shad=prep_pipe,

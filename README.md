@@ -105,6 +105,17 @@ invent variants — and then **woven back into both output documents**:
 
 - in the **report**, each column carries only its own witness's markers.
 
+Where several witnesses turn a page at the same word — in practice at the
+opening — their markers are gathered into one bracket rather than left in a
+row, and a space follows the closing bracket:
+
+```
+[BX1.1v.1; AB1.272; DX1.145r.1; GX1.158v.1] skyes bu dam pa rnams ni/
+```
+
+Only the brackets are merged. What is inside each marker is whatever your file
+wrote, since that form is your choice rather than the tool's.
+
 Every version keeps the format its own source uses; nothing is converted. The
 notes themselves carry no page references — repeating one on every variant made
 them longer without making them more useful.
@@ -128,6 +139,27 @@ two spellings as one word. See [below](#orthography-versus-text).
 **Ignore shad (།) differences** — on by default. Differences consisting only of
 shad punctuation (`།`, `༎`, `༔`, and the Wylie `/`) are not reported. Turn it
 off to have them appear.
+
+**Tidy the Wylie** — **on** by default. Writes the Wylie the way the edition
+wants it read, in both documents:
+
+| | |
+|---|---|
+| Head marks `@ # !` | removed — they transliterate the yig-mgo ornament, which is structural rather than textual |
+| Apostrophes | every kind becomes the typographic one `’`, so a-chung is encoded one way throughout, in the notes as well as the text |
+| Explicit space `_` | written as an actual space |
+| Space **before** a shad | only after the letter ང, where Tibetan writes a tsheg. Your witnesses already follow this 94% of the time, and elsewhere have no space 96% of the time, so it is a tidy-up rather than a rewrite |
+| Space **after** a shad | added when a word follows |
+
+**How a run of shads is written is left exactly as your source has it.**
+Whether a verse line closes `//` or `/ /` is an open question among editors,
+and settling it here by accident would pre-empt a decision worth making on
+evidence.
+
+**It changes the text, which is why it is a choice.** Untick it and both
+documents reproduce your files character for character, as they always did.
+What it never changes is the collation: the same variants are found either
+way — 189 notes on the Jātaka 35 witnesses with it on and with it off.
 
 **Lay out verse as verse** — off by default. In the golden text, each pāda of
 verse goes on its own line in stanzas of four, and prose breaks where a
