@@ -1617,8 +1617,9 @@ def derive_metres(text):
 def golden_layout(text, stanza=VERSE_STANZA):
     """Where to break the reading text, as ``(offset, kind)`` pairs.
 
-    ``kind`` is "line" for a pada, "stanza" for the last pada of a stanza, and
-    "para" for the end of a prose sentence. Offsets are into ``text`` itself,
+    ``kind`` is "line" for a pada, "stanza" for the last pada of a stanza,
+    "close" for the last pada of a passage, and "para" for the end of a prose
+    sentence. Offsets are into ``text`` itself,
     so the document can break exactly there.
 
     Prose is broken only at a sentence-final particle — ngo, to, do, so, go,
@@ -1640,7 +1641,13 @@ def golden_layout(text, stanza=VERSE_STANZA):
         for n, line in enumerate(b.lines):
             last = n + 1 == len(b.lines)
             at_stanza = (n + 1) % stanza == 0 and not last
-            breaks.append((line.end, "stanza" if at_stanza else "line"))
+            # "close" ends the passage: it carries the same blank line a
+            # stanza break does, so the prose that follows starts clear of the
+            # verse. The last line takes it INSTEAD of a stanza break, never
+            # as well — a block whose length divides by four would otherwise
+            # end on two blank lines where one is wanted.
+            kind = "close" if last else ("stanza" if at_stanza else "line")
+            breaks.append((line.end, kind))
     for words, shad, _sp, end in _verse_segments(clean):
         if any(lo <= end <= hi for lo, hi in spans):
             continue                       # inside verse; already broken
@@ -1656,6 +1663,13 @@ def golden_layout(text, stanza=VERSE_STANZA):
         m = blank.match(text, at)
         moved.append(((m.end() if m else at), kind))
     moved.sort()
+    # Where one passage ends and the next begins at the same point, the close
+    # has already opened a line and left a blank before it. The open would add
+    # a second, with an empty verse line between them. Two passages running
+    # together want one gap, exactly as two stanzas do.
+    moved = [b for k, b in enumerate(moved)
+             if not (b[1] == "open" and k and moved[k - 1][0] == b[0]
+                     and moved[k - 1][1] == "close")]
     return moved, spans
 
 
@@ -2379,7 +2393,7 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
     def start_line(kind, at):
         """Close the current paragraph and open the next one."""
         nonlocal p_text
-        if kind == "stanza":
+        if kind in ("stanza", "close"):
             gap = doc.add_paragraph()
             gap.paragraph_format.space_after = Pt(0)
         p_text = doc.add_paragraph()

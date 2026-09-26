@@ -190,6 +190,11 @@ sentence actually ends rather than at every shad:
     de dag rgyal po'i bka' lung spyi bos nod//
 ```
 
+A blank line separates one stanza from the next, and one closes each passage
+where the prose resumes. Never two: a passage whose length divides by four
+takes the closing gap instead of a stanza gap, and where two passages run
+together they share one.
+
 Tibetan verse is isosyllabic, so the pādas are found by **metre** — the
 syllable count the text itself uses, read off the text rather than assumed, so
 a work in a longer metre is found instead of walked past. A double shad marks
