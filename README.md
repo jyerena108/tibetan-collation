@@ -86,14 +86,21 @@ markers** box. Tick it and you can give an example:
   does, and any rule narrow enough to describe one convention quietly drops
   another. Whatever is inside is reproduced exactly; the tool never interprets
   or reformats it.
-- Or paste the first marker from that file to **narrow** it to that shape,
-  which is worth doing only where a text carries brackets that are not page
-  markers — `Pdf.50`, `p.292`,
-  `kha, 1r.1 (pdf 47)` — and the pattern is worked out from it. Later markers
-  are found even when the case changes (`Pdf.294` then `pdf.295`), the volume
-  changes (`ka` then `kha`), or the side changes (`4r` then `4v`). A trailing
-  parenthetical is optional, so a sample carrying `(pdf 47)` still matches
-  markers without one.
+- Fill in the second box **only if the text uses brackets for other things
+  too** — an editorial insertion, a restored reading, a note. Paste the first
+  page marker and only tags of that shape are taken; the rest stay in the
+  text:
+
+  | The box | Markers taken | Text keeps |
+  |---|---|---|
+  | blank | `[V1.1v.1]` `[sic]` `[V1.1v.2]` `[restored]` | `chos kyi dbyings rnam par dag pa yin` |
+  | `[V1.1v.1]` | `[V1.1v.1]` `[V1.1v.2]` | `chos kyi dbyings [sic] rnam par dag pa [restored] yin` |
+
+  The shape is generalised from what you paste — `Pdf.50`, `p.292`,
+  `kha, 1r.1 (pdf 47)` all work — and later markers still match when the case
+  changes (`Pdf.294` then `pdf.295`), the volume changes (`ka` then `kha`), or
+  the side changes (`4r` then `4v`). A trailing parenthetical is optional, so
+  a sample carrying `(pdf 47)` still matches markers without one.
 
 Markers are removed before collation — left in, they align as readings and
 invent variants — and then **woven back into both output documents**:

@@ -2542,19 +2542,21 @@ def _page_marker_controls(slot, who):
         "This text has page markers",
         value=False,
         key=f"pghas{slot}",
-        help="Tick this if the text marks its pages, e.g. [V1.1v.1] or "
-        "[V1.272]. They are removed before collation, shown in the golden "
-        "document where each page begins, and kept in each column of the "
-        "report.",
+        help="Tick this if the text marks its pages in brackets — [V1.1v.1], "
+        "[AB1, 272], [d272a], whatever form it uses. They are removed before "
+        "collation, shown in the golden document where each page begins, and "
+        "kept in each column of the report, exactly as written.",
     ):
         example = st.text_input(
-            "Optional: add example of first page marker",
+            "Only if this text uses brackets for other things too",
             value="",
             key=f"pgx{slot}",
             placeholder="[V1.1v.1]",
-            help="Leave blank for the usual bracketed style. Otherwise paste "
-            "the first marker from this text and the pattern is worked out "
-            "from it.",
+            help="Leave this blank and every bracketed tag is read as a page "
+            "marker, whatever is inside it. Fill it in only when the text "
+            "also uses brackets for something else — an editorial insertion, "
+            "a restored reading, a note. Paste the first page marker and only "
+            "tags of that shape are taken; the rest are left in the text.",
         )
     return example
 
