@@ -357,10 +357,17 @@ def pattern_from_example(example: str) -> str:
     return pat
 
 
-# House style is a bracketed tag containing a dot: [BX1.1v.1], [DX1.145r.1],
-# or the shorter [AB1.272]. Requiring the dot is what separates a page marker
-# from a plain folio tag like [354], which the folio-tag option handles.
-DEFAULT_PAGE_MARKER_RE = r"\[[^\[\]\n]*\.[^\[\]\n]*\]"
+# A page marker is anything in square brackets, whatever is inside it.
+#
+# Not a pattern to be matched: editors mark pages however their source does —
+# [BX1.1v.1], [AB1, 272], [d272a], [d.1.2 456], [dfc, 123v] — and any rule
+# narrow enough to describe one convention silently drops another. The tool
+# had required a dot, so [AB1, 272] contributed nothing the day that witness
+# was rewritten with a comma, and [d272a] was never seen at all.
+#
+# Whatever is inside is reproduced exactly. That form is the editor's, made
+# once in their file, and not the tool's to interpret or normalise.
+DEFAULT_PAGE_MARKER_RE = r"\[[^\[\]\n]*\]"
 
 
 def extract_page_markers(text: str, example: str):
@@ -372,11 +379,14 @@ def extract_page_markers(text: str, example: str):
     align as readings and pollute the apparatus; their positions are what let
     the golden document show where each witness turned its page.
 
-    With no ``example`` the default pattern is used: any bracketed tag
-    containing a dot. That covers the agreed house style — ``[BX1.1v.1]``
-    (siglum, folio, side, line) and the shorter ``[AB1.272]`` — while leaving
-    a plain folio tag such as ``[354]`` or ``[zhe 1]`` to the folio-tag
-    preprocessing option, which is a different thing.
+    With no ``example`` every bracketed tag is taken, whatever it holds, and
+    reproduced exactly as written. Giving an ``example`` narrows it to that
+    shape, which is worth doing only where a text carries brackets that are
+    not page markers.
+
+    The note references a collation report carries — ``[1]``, ``[17]`` — are
+    not a worry here: parse_collation_report removes them as it reads the
+    report, since the tool wrote them and knows them for what they are.
     """
     example = (example or "").strip()
     try:
@@ -2948,12 +2958,23 @@ if run_btn and ready:
         texts[_i], _mk = extract_page_markers(_t, _ex)
         page_markers.append(_mk)
         if not _mk:
-            _what = f"the example `{_ex.strip()}`" if _ex.strip() else "the default [V1.1v.1] style"
-            st.warning(
-                f"**{names[_i]}** — no page markers matched {_what}. That "
-                "file will contribute no page references; check the example "
-                "matches how its pages are actually marked."
-            )
+            # Without an example the tool takes every bracketed tag, so
+            # finding none means the file has no brackets at all — a
+            # different problem from an example that does not fit.
+            if _ex.strip():
+                st.warning(
+                    f"**{names[_i]}** — nothing matched the example "
+                    f"`{_ex.strip()}`. That file will contribute no page "
+                    "references; check the example against how its pages are "
+                    "actually marked, or clear it to take every bracketed tag."
+                )
+            else:
+                st.warning(
+                    f"**{names[_i]}** — no bracketed tags found, so that file "
+                    "will contribute no page references. Page markers are "
+                    "read from anything in square brackets, in whatever form "
+                    "the file writes them."
+                )
 
     golden_milestones = None
     if prep_tags:

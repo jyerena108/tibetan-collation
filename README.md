@@ -80,11 +80,15 @@ sigla, and which one is the base straight out of the report instead.
 **Page / folio markers.** Each witness has its own **This text has page
 markers** box. Tick it and you can give an example:
 
-- Leave the box **blank** for the house style — a bracketed tag containing a
-  dot, like `[V1.1v.1]` (siglum, folio, side, line) or the shorter `[V1.272]`.
-  A plain folio tag such as `[354]` is *not* a page marker; that belongs to the
-  folio-tag option below.
-- Or paste the first marker from that file — `Pdf.50`, `p.292`,
+- Leave the box **blank** and **every bracketed tag is taken**, whatever is
+  inside it — `[V1.1v.1]`, `[AB1, 272]`, `[d272a]`, `[d.1.2 456]`,
+  `[dfc, 123v]`, `[p 47 (pdf 50)]`. Editors mark pages however their source
+  does, and any rule narrow enough to describe one convention quietly drops
+  another. Whatever is inside is reproduced exactly; the tool never interprets
+  or reformats it.
+- Or paste the first marker from that file to **narrow** it to that shape,
+  which is worth doing only where a text carries brackets that are not page
+  markers — `Pdf.50`, `p.292`,
   `kha, 1r.1 (pdf 47)` — and the pattern is worked out from it. Later markers
   are found even when the case changes (`Pdf.294` then `pdf.295`), the volume
   changes (`ka` then `kha`), or the side changes (`4r` then `4v`). A trailing
@@ -115,6 +119,10 @@ row, and a space follows the closing bracket:
 
 Only the brackets are merged. What is inside each marker is whatever your file
 wrote, since that form is your choice rather than the tool's.
+
+When a collation report is fed back in, the note references it carries —
+`[1]`, `[17]` — are not mistaken for page markers: the tool wrote them and
+discards them as it reads the report.
 
 Every version keeps the format its own source uses; nothing is converted. The
 notes themselves carry no page references — repeating one on every variant made
