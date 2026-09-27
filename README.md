@@ -447,6 +447,23 @@ No server needed. Streamlit redeploys automatically on every push.
 
 ---
 
+## Other tools
+
+Further tools live in this same app as additional pages, so they share one
+deploy, one pinned dependency set and one address.
+
+| Tool | Status |
+|---|---|
+| **Wylie → Uchen converter, with the apparatus intact** | in preparation — see [SPEC-wylie-to-unicode.md](SPEC-wylie-to-unicode.md) |
+
+The converter turns a critical edition from Wylie into Unicode Tibetan,
+footnotes and all, leaving the apparatus's own signs untouched: the sigla, the
+square brackets, `om.` and `em.`. Converters exist on the web, but they take a
+plain text and know nothing of footnotes — which is where the difficulty
+actually is.
+
+---
+
 ## Credits
 
 Built by **Yerena, J.**

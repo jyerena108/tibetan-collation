@@ -3307,6 +3307,26 @@ streamlit run collation_app_01.py
 Full documentation is in the [README]({REPO_URL}#readme).
 """)
 
+# Other tools live in this same app as further pages, so they share one
+# deploy, one pinned dependency set and one address. A page added under
+# pages/ appears in Streamlit's own sidebar; this section says what is here
+# and what is coming, for a reader who is looking at the bottom of the page
+# rather than the sidebar.
+with st.expander("🧰 Other tools"):
+    st.markdown(
+        "**Wylie → Uchen converter, with the apparatus intact** — *in "
+        "preparation.* Converts a critical edition from Wylie into Unicode "
+        "Tibetan, footnotes and all, leaving the apparatus's own signs "
+        "alone: the sigla, the square brackets, `om.` and `em.`. Web "
+        "converters handle plain text; none of them know what a footnote is."
+        "\n\n"
+        f"The specification is in the repository: "
+        f"[SPEC-wylie-to-unicode.md]({REPO_URL}/blob/main/SPEC-wylie-to-unicode.md)."
+        "\n\n"
+        "Tools added here appear in the sidebar as further pages of this "
+        "same app."
+    )
+
 st.caption(
     f"**Tibetan Collation Tool** by Yerena, J. — free and open source "
     f"([MIT]({REPO_URL}/blob/main/LICENSE)) · [source code]({REPO_URL})  \n"
