@@ -82,39 +82,123 @@ def _replace_run(parent, old_run, new_runs):
         parent.insert(idx + offset, nr)
 
 
-def _merge_spans(spans):
-    """Collapse adjacent spans that agree on convert/protect into one."""
-    out = []
-    for text, convert in spans:
-        if out and out[-1][1] == convert:
-            out[-1] = (out[-1][0] + text, convert)
+def _group_tokens(tokens, is_exception):
+    """Group ``(token, is_space)`` pairs into ``(text, convert)`` spans.
+
+    A run of Wylie words is kept as *one* span even across the ordinary
+    space(s) between them, rather than converting word by word: pyewts turns
+    an inter-word space in its input into the tsheg itself, so feeding it
+    one word at a time and rejoining with the original literal space would
+    silently drop every tsheg. A space is only ever folded into a span this
+    way when both its neighbours are convertible — a space touching an
+    exception (a siglum, `]`, a page marker, ...) stays exactly as written,
+    since nothing there should turn into a tsheg.
+    """
+    kinds = []  # "space" | "protect" | "convert", parallel to tokens
+    for tok in tokens:
+        if tok.isspace():
+            kinds.append("space")
+        elif is_exception(tok):
+            kinds.append("protect")
         else:
-            out.append((text, convert))
-    return out
+            kinds.append("convert")
+
+    spans, i, n = [], 0, len(tokens)
+    while i < n:
+        if kinds[i] != "convert":
+            spans.append((tokens[i], False))
+            i += 1
+            continue
+        j, buf = i, tokens[i]
+        while j + 2 < n and kinds[j + 1] == "space" and kinds[j + 2] == "convert":
+            buf += tokens[j + 1] + tokens[j + 2]
+            j += 2
+        spans.append((buf, True))
+        i = j + 1
+    return spans
 
 
 def _apply_tokenizer(run, parent, tokenizer_re, is_exception):
     """Split ``run``'s text by ``tokenizer_re`` and convert non-exceptions.
 
-    ``is_exception(token)`` decides, per token, whether it is left alone.
-    A run with nothing to convert is never touched, so untouched text stays
-    byte-identical to the source.
+    ``is_exception(token)`` decides, per non-space token, whether it is left
+    alone. A run with nothing to convert is never touched, so untouched text
+    stays byte-identical to the source. Returns the ``(node, convert)`` pairs
+    now occupying ``run``'s old slot — a single ``(run, False)`` when nothing
+    changed — for ``_bridge_tsheg`` to reason about afterwards.
     """
     t = run.find(_WT)
     if t is None or not t.text:
-        return
-    spans = []
-    for m in tokenizer_re.finditer(t.text):
-        tok = m.group(0)
-        if tok.isspace() or is_exception(tok):
-            spans.append((tok, False))
-        else:
-            spans.append((to_uchen(tok), True))
-    spans = _merge_spans(spans)
+        return [(run, False)]
+    tokens = [m.group(0) for m in tokenizer_re.finditer(t.text)]
+    if not tokens:
+        return [(run, False)]
+    spans = [(to_uchen(text) if convert else text, convert)
+             for text, convert in _group_tokens(tokens, is_exception)]
     if len(spans) == 1 and not spans[0][1]:
-        return  # nothing converted — leave the run exactly as it was
+        return [(run, False)]  # nothing converted — left exactly as it was
     new_runs = [_clone_run_with_text(run, text) for text, _ in spans]
     _replace_run(parent, run, new_runs)
+    return [(node, convert) for node, (_, convert) in zip(new_runs, spans)]
+
+
+# A footnote reference is its own <w:r>, with no <w:t> at all, sitting right
+# at the word boundary it marks — so the two Wylie words either side of it
+# end up in different runs, each converted on its own by _apply_tokenizer
+# above. That is fine for the words themselves, but the ordinary space
+# between them, now stranded as the leading/trailing whitespace of one of
+# those runs, no longer has a convertible neighbour *in its own run* to be
+# folded into — so it survives conversion as a literal space instead of
+# becoming the tsheg it would have if the reference weren't there.
+#
+# This second, paragraph-wide pass fixes exactly that: a run holding nothing
+# but whitespace, with a converted run on each side once reference runs
+# (which carry no text and so cannot end a word or start one) are looked
+# through, is the tsheg the reference marker stood in the way of.
+_TSHEG = "་"
+
+
+def _paragraph_entries(p, tokenizer_re, is_exception):
+    """``(node, kind)`` for every run in ``p``, after converting each.
+
+    ``kind`` is ``"convert"``, ``"protect"``, or ``"milestone"`` (a run with
+    no text — a footnote reference — transparent to the tsheg-bridging pass).
+    """
+    entries = []
+    for run in list(p):
+        if run.tag != _WR:
+            continue
+        t = run.find(_WT)
+        if t is None or not t.text:
+            entries.append((run, "milestone"))
+            continue
+        for node, convert in _apply_tokenizer(run, p, tokenizer_re, is_exception):
+            entries.append((node, "convert" if convert else "protect"))
+    return entries
+
+
+def _nearest_content_kind(entries, start, step):
+    i = start
+    while 0 <= i < len(entries):
+        kind = entries[i][1]
+        if kind != "milestone":
+            return kind
+        i += step
+    return None
+
+
+def _bridge_tsheg(entries) -> None:
+    """Turn a whitespace-only run between two converted runs into a tsheg."""
+    for i, (node, kind) in enumerate(entries):
+        if kind != "protect":
+            continue
+        t = node.find(_WT)
+        if t is None or not t.text or not t.text.isspace():
+            continue
+        before = _nearest_content_kind(entries, i - 1, -1)
+        after = _nearest_content_kind(entries, i + 1, 1)
+        if before == "convert" and after == "convert":
+            t.text = _TSHEG
 
 
 # ── Main text: only page markers (brackets) are left alone ────────────
@@ -160,9 +244,8 @@ def _find_golden_text_start(doc_root):
 
 def _convert_body(doc_root) -> None:
     for p in _find_golden_text_start(doc_root):
-        for run in list(p):
-            if run.tag == _WR:
-                _apply_tokenizer(run, p, _MAIN_TOKEN_RE, _is_bracketed)
+        entries = _paragraph_entries(p, _MAIN_TOKEN_RE, _is_bracketed)
+        _bridge_tsheg(entries)
 
 
 # ── Footnotes: sigla, technical terms, and structural punctuation stay ──
@@ -179,9 +262,8 @@ def _convert_footnotes(fn_root, sigla, terms, skip_ids) -> None:
         if note.get(_W + "id") in skip_ids:
             continue
         for p in note.iter(_WP):
-            for run in list(p):
-                if run.tag == _WR:
-                    _apply_tokenizer(run, p, _NOTE_TOKEN_RE, is_exception)
+            entries = _paragraph_entries(p, _NOTE_TOKEN_RE, is_exception)
+            _bridge_tsheg(entries)
 
 
 # ── First pass: find the sigla and technical terms ─────────────────────
