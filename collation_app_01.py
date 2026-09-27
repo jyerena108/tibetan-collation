@@ -213,7 +213,7 @@ def parse_collation_report(raw: bytes):
 # ── Google Docs ──────────────────────────────────────────────────────
 # Shared with the other Streamlit pages — see docio.py — because a page can't
 # import this file itself for it without re-running this file's own UI code.
-from docio import fetch_google_doc, strip_gdoc_footnotes  # noqa: E402
+from docio import fetch_google_doc, strip_gdoc_footnotes, deployed_version  # noqa: E402
 
 
 # ── Page / folio markers ─────────────────────────────────────────────
@@ -3235,5 +3235,6 @@ st.caption(
     "Alignment by [Pydurma](https://github.com/openpecha/pydurma) "
     "(OpenPecha, MIT).  \n"
     "Provided as-is, without warranty. Please check collation results before "
-    "relying on them in published work."
+    "relying on them in published work.  \n"
+    f"Last updated {deployed_version()}"
 )

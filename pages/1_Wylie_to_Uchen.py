@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import streamlit as st
 
-from docio import fetch_google_doc
+from docio import fetch_google_doc, deployed_version
 import wylie_uchen as wu
 
 
@@ -141,3 +141,6 @@ if st.session_state.wu_raw is not None:
                 file_name=f"{st.session_state.wu_name} (Uchen).docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
+
+st.divider()
+st.caption(f"Last updated {deployed_version()}")

@@ -6,9 +6,31 @@ that file itself, which would re-run its top-level Streamlit UI.
 """
 
 import re
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
+
+
+def deployed_version() -> str:
+    """The last commit's date, as a display string.
+
+    Streamlit Cloud rebuilds lag behind a push by a few minutes and give no
+    visible sign of it — the page a user sees can be running older code with
+    nothing to tell them so. Reading it straight from git, rather than
+    hand-maintaining a version string that's one edit away from lying, means
+    a stale deploy shows up as a stale date instead of as a silent mismatch.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "log", "-1", "--format=%cd", "--date=format:%Y-%m-%d %H:%M"],
+            cwd=Path(__file__).parent,
+            capture_output=True, text=True, timeout=5, check=True,
+        )
+        return out.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
 
 
 # ── Google Docs ──────────────────────────────────────────────────────
