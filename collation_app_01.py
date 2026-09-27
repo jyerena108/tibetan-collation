@@ -2895,19 +2895,6 @@ ignore_shad = st.checkbox(
     "differences show up in the apparatus.",
 )
 
-want_normalize = st.checkbox(
-    "Tidy the Wylie",
-    value=True,
-    key="wantnorm",
-    help="Write the Wylie the way the edition wants it read: head marks "
-    "(@ # !) removed, every apostrophe written as the typographic one, the "
-    "explicit space _ written as a space, a shad preceded by a space only "
-    "after the letter ང (where Tibetan writes a tsheg), and followed by one "
-    "when a word comes next. How a run of shads is written — // or / / — is "
-    "left exactly as your source has it. Untick to have both documents "
-    "reproduce your files character for character.",
-)
-
 want_verse = st.checkbox(
     "Lay out verse as verse",
     value=False,
@@ -2938,11 +2925,12 @@ want_profile = st.checkbox(
 # come from session_state because the checkboxes live inside the expander and
 # so have not been drawn yet at this point; before the first interaction
 # session_state is empty and the defaults (all on) stand.
-_PREP_KEYS = ("prep_tags", "prep_keep", "prep_us", "prep_pipe", "prep_head")
+_PREP_KEYS = ("prep_tags", "prep_keep", "prep_us", "prep_pipe", "prep_head",
+              "wantnorm")
 _prep_on = sum(bool(st.session_state.get(k, True)) for k in _PREP_KEYS)
 
 with st.expander(
-    f"Reading the files — folio tags, _, |, head marks   ·   "
+    f"Reading the files — folio tags, _, |, head marks, tidying   ·   "
     f"{_prep_on} of {len(_PREP_KEYS)} on",
     expanded=False,
 ):
@@ -2991,6 +2979,19 @@ with st.expander(
         help="These transliterate the ornamental head marks that open a "
         "section; they are structural, not textual, so they never count as "
         "variants.",
+    )
+
+    want_normalize = st.checkbox(
+        "Tidy the Wylie",
+        value=True,
+        key="wantnorm",
+        help="Write the Wylie the way the edition wants it read: head marks "
+        "(@ # !) removed, every apostrophe written as the typographic one, the "
+        "explicit space _ written as a space, a shad preceded by a space only "
+        "after the letter ང (where Tibetan writes a tsheg), and followed by one "
+        "when a word comes next. How a run of shads is written — // or / / — is "
+        "left exactly as your source has it. Untick to have both documents "
+        "reproduce your files character for character.",
     )
 
 st.divider()
