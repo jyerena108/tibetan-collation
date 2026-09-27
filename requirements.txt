@@ -15,6 +15,11 @@
 streamlit==1.63.0
 bayoo-docx==0.2.20
 
+# EWTS <-> Unicode transliteration for the Wylie -> Uchen page. Pure Python,
+# no dependencies of its own — see SPEC-wylie-to-unicode.md for why this is
+# vendored rather than hand-written.
+pyewts==1.0.0
+
 # Pydurma's dependencies. prettytable is imported lazily inside
 # Pydurma/src/Pydurma/utils/utils.py, so it does not show up in a search for
 # top-level imports — it is needed all the same.
