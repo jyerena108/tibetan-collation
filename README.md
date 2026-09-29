@@ -320,10 +320,10 @@ takes effect if its pattern actually appears in your texts.
 | Treat `_` as a space | EWTS writes an explicit space as `_`; without this, `pa/_bdag` and `pa/ bdag` read as different words |
 | Treat `\|` as a shad | Some OCR output writes the shad as a pipe |
 | Ignore head marks `@ # !` | These transliterate the yig-mgo ornaments (༄༅) that open a section — structural, not textual |
-| Tidy the Wylie | Writes the Wylie the way the edition wants it read — see below |
+| Normalise the transliteration | Applies the edition's orthographic conventions — see below |
 
-**Tidy the Wylie** — **on** by default. Writes the Wylie the way the edition
-wants it read, in both documents:
+**Normalise the transliteration** — **on** by default. Applies the edition's
+orthographic conventions to both documents:
 
 | | |
 |---|---|
@@ -332,6 +332,9 @@ wants it read, in both documents:
 | Explicit space `_` | written as an actual space |
 | Space **before** a shad | only after the letter ང, where Tibetan writes a tsheg. Your witnesses already follow this 94% of the time, and elsewhere have no space 96% of the time, so it is a tidy-up rather than a rewrite |
 | Space **after** a shad | added when a word follows |
+
+These are conventions of the transliteration, so a text already in Tibetan
+script is unaffected.
 
 **How a run of shads is written is left exactly as your source has it.**
 Whether a verse line closes `//` or `/ /` is an open question among editors,

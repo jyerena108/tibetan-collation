@@ -2839,7 +2839,7 @@ _PREP_KEYS = ("prep_tags", "prep_keep", "prep_us", "prep_pipe", "prep_head",
 _prep_on = sum(bool(st.session_state.get(k, True)) for k in _PREP_KEYS)
 
 with st.expander(
-    f"Reading the files — folio tags, _, |, head marks, tidying   ·   "
+    f"Reading the files — folio tags, _, |, head marks, orthography   ·   "
     f"{_prep_on} of {len(_PREP_KEYS)} on",
     expanded=False,
 ):
@@ -2891,16 +2891,20 @@ with st.expander(
     )
 
     want_normalize = st.checkbox(
-        "Tidy the Wylie",
+        "Normalise the transliteration",
         value=True,
         key="wantnorm",
-        help="Write the Wylie the way the edition wants it read: head marks "
-        "(@ # !) removed, every apostrophe written as the typographic one, the "
-        "explicit space _ written as a space, a shad preceded by a space only "
-        "after the letter ང (where Tibetan writes a tsheg), and followed by one "
-        "when a word comes next. How a run of shads is written — // or / / — is "
-        "left exactly as your source has it. Untick to have both documents "
-        "reproduce your files character for character.",
+        help="Applies the orthographic conventions of the edition to both "
+        "documents: head marks (@ # !) are removed, being structural rather "
+        "than textual; every apostrophe is written as the typographic form "
+        "U+2019, so a-chung is encoded consistently throughout, in the notes "
+        "as well as the text; the explicit space _ is written as a space; and "
+        "a shad is preceded by a space only after ང, where Tibetan writes a "
+        "tsheg, and followed by one where a word succeeds it. How a run of "
+        "shads is written — // or / / — is left as the source has it. These "
+        "are conventions of the transliteration, so a text in Tibetan script "
+        "is unaffected. Untick to reproduce the sources character for "
+        "character.",
     )
 
 st.divider()
