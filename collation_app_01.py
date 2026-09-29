@@ -3180,35 +3180,6 @@ if "report_buf" in st.session_state:
 st.divider()
 REPO_URL = "https://github.com/jyerena108/tibetan-collation"
 
-with st.expander("ℹ️ About this tool"):
-    st.markdown(f"""
-**Tibetan Collation Tool** — aligns two or three versions of a Tibetan text
-and generates a critical apparatus in Word format. Works with Unicode Tibetan
-and Wylie/EWTS transliteration.
-
-Notes read `V1 kyi] V2, V3 ni` — *where V1 reads `kyi`, V2 and V3 read
-`ni`*. Omissions are marked `om.`
-
-**How to cite**
-
-> Yerena, J. *Tibetan Collation Tool* (2026). {REPO_URL}
-
-If the alignment matters to your argument, please also cite Pydurma:
-
-> Roux, E. & Kaldan, T. *Pydurma* (2023). https://github.com/openpecha/pydurma
-
-**Run your own copy**
-
-```bash
-git clone {REPO_URL}.git
-cd tibetan-collation
-pip install -r requirements.txt
-streamlit run collation_app_01.py
-```
-
-Full documentation is in the [README]({REPO_URL}#readme).
-""")
-
 # Other tools live in this same app as further pages, so they share one
 # deploy, one pinned dependency set and one address. A page added under
 # pages/ appears in Streamlit's own sidebar; this section says what is here

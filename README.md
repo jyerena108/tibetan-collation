@@ -464,6 +464,18 @@ actually is.
 
 ---
 
+## How to cite
+
+> Yerena, J. *Tibetan Collation Tool* (2026).
+> https://github.com/jyerena108/tibetan-collation
+
+If the alignment matters to your argument, please also cite Pydurma:
+
+> Roux, E. & Kaldan, T. *Pydurma* (2023).
+> https://github.com/openpecha/pydurma
+
+---
+
 ## Credits
 
 Built by **Yerena, J.**
