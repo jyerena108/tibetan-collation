@@ -2557,15 +2557,22 @@ apply_preprocessing_options()
 # ─────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Tibetan Collation Tool",
+    page_title="Tibetan Collation Tool (Beta)",
     page_icon="📜",
     layout="centered",
 )
 
-st.title("📜 Tibetan Collation Tool")
+st.title("📜 Tibetan Collation Tool  (Beta)")
 st.caption(
     "Collate two to six Tibetan witnesses into a critical apparatus. "
     "You get a collation report and a golden text with footnotes, in Word."
+)
+# What the label commits to, in one line: the behaviour and the output format
+# are not yet settled. The caveat about verifying results belongs to the
+# footer, where it already stands, so this does not repeat it.
+st.caption(
+    ":orange[**Beta**] — under active development; behaviour and output "
+    "format may change. Corrections and suggestions are welcome."
 )
 
 st.divider()
