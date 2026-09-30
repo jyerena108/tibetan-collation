@@ -41,6 +41,13 @@ def masthead() -> None:
     The rule between them is the same hairline the ITAS logo uses internally
     between its mark and its descriptor, so the pair reads as one lockup
     rather than as two logos parked side by side.
+
+    Sized so the ITAS descriptor line — "International Institute for Tibetan
+    and Asian Studies" — is actually readable. Below about 44px it is not,
+    and a logo nobody can read is decoration rather than attribution. Both
+    files have the resolution for it: 48px is 59% of the ITAS artwork's own
+    height, 42px is 47% of the Karmapa's, so neither is being enlarged past
+    what it holds.
     """
     try:
         itas = _data_uri("itas-logo.png")
@@ -50,18 +57,37 @@ def masthead() -> None:
 
     st.markdown(
         f"""
-        <div style="background:{_BAND};margin:-1rem -1rem 1.6rem;padding:15px 26px;
-                    display:flex;align-items:center;gap:22px;flex-wrap:wrap;">
-          <a href="{ITAS_URL}" target="_blank" rel="noopener"
-             style="display:flex;align-items:center;">
-            <img src="{itas}" alt="ITAS — International Institute for Tibetan
-                 and Asian Studies" style="height:34px;display:block;">
+        <style>
+          .tct-masthead {{
+            background:{_BAND}; margin:-1rem -1rem 1.6rem; padding:20px 28px;
+            display:flex; align-items:center; gap:28px; flex-wrap:wrap;
+          }}
+          .tct-masthead a {{ display:flex; align-items:center; }}
+          .tct-masthead img {{ display:block; }}
+          .tct-masthead .tct-itas {{ height:48px; }}
+          .tct-masthead .tct-km   {{ height:42px; }}
+          .tct-masthead .tct-rule {{
+            width:1px; align-self:stretch; background:{_RULE};
+          }}
+          /* Narrow enough that the two marks stack: the rule would be left
+             standing beside the first one with the second orphaned beneath
+             it, so it goes, and the marks close up. */
+          @media (max-width: 640px) {{
+            .tct-masthead {{ gap:16px; padding:16px 20px; }}
+            .tct-masthead .tct-rule {{ display:none; }}
+            .tct-masthead .tct-itas {{ height:40px; }}
+            .tct-masthead .tct-km   {{ height:34px; }}
+          }}
+        </style>
+        <div class="tct-masthead">
+          <a href="{ITAS_URL}" target="_blank" rel="noopener">
+            <img class="tct-itas" src="{itas}"
+                 alt="ITAS — International Institute for Tibetan and Asian Studies">
           </a>
-          <div style="width:1px;align-self:stretch;background:{_RULE};"></div>
-          <a href="{KARMAPAS_URL}" target="_blank" rel="noopener"
-             style="display:flex;align-items:center;">
-            <img src="{karmapas}" alt="Translating the Karmapas' Works"
-                 style="height:30px;display:block;">
+          <div class="tct-rule"></div>
+          <a href="{KARMAPAS_URL}" target="_blank" rel="noopener">
+            <img class="tct-km" src="{karmapas}"
+                 alt="Translating the Karmapas' Works">
           </a>
         </div>
         """,
