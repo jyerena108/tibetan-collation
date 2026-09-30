@@ -34,6 +34,7 @@ from docx.enum.section import WD_ORIENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
+import branding
 from Pydurma.gen.normalizer_gen import GenericNormalizer
 from Pydurma.gen.tokenizer_gen import GenericTokenizer
 from Pydurma.encoder import Encoder
@@ -2562,6 +2563,8 @@ st.set_page_config(
     layout="centered",
 )
 
+branding.masthead()
+
 st.title("📜 Tibetan Collation Tool  (Beta)")
 st.caption(
     "Collate two to six Tibetan witnesses into a critical apparatus. "
@@ -3218,5 +3221,6 @@ st.caption(
     "(OpenPecha, MIT).  \n"
     "Provided as-is, without warranty. Please check collation results before "
     "relying on them in published work.  \n"
+    f"{branding.partner_links()}  \n"
     f"Last updated {deployed_version()}"
 )
