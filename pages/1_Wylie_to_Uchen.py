@@ -11,7 +11,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import streamlit as st
 
-from docio import fetch_google_doc, deployed_version
+from docio import fetch_google_doc
+import branding
 import wylie_uchen as wu
 
 
@@ -21,11 +22,23 @@ st.set_page_config(
     layout="centered",
 )
 
+branding.masthead()
+
 st.title("ༀ Wylie → Uchen")
 st.caption(
     "Converts Wylie to Uchen in a Word file or Google Doc, footnotes "
     "included, without touching the apparatus — sigla, page markers, and "
     "editorial terms like `om.`/`em.` stay exactly as written."
+)
+# A stronger caveat than the collation tool's "Beta": that one is complete
+# and being refined, this one is not finished. The table case from the
+# specification is not built, so the limitation is named rather than left
+# for a user to discover on a Jataka file.
+st.caption(
+    ":orange[**Work in progress**] — this converter is still being built. "
+    "It handles plain documents with footnotes; text inside tables is not "
+    "converted yet. Behaviour and output may change. Please check the "
+    "conversion before relying on it."
 )
 
 st.divider()
@@ -143,4 +156,12 @@ if st.session_state.wu_raw is not None:
             )
 
 st.divider()
-st.caption(f"Last updated {deployed_version()}")
+st.caption(
+    branding.footer(
+        "Wylie → Uchen Converter",
+        "Transliteration by [pyewts](https://pypi.org/project/pyewts/) "
+        "(Apache-2.0).",
+        "Please check the conversion before relying on it in published "
+        "work.",
+    )
+)

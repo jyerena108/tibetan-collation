@@ -15,8 +15,11 @@ from pathlib import Path
 
 import streamlit as st
 
+from docio import deployed_version
+
 ITAS_URL = "https://itas-uni.eu/"
 KARMAPAS_URL = "https://www.translating-karmapas.org/"
+REPO_URL = "https://github.com/jyerena108/tibetan-collation"
 
 _ASSETS = Path(__file__).parent / "assets"
 _BAND = "#16181A"          # the band's own ground, independent of the theme
@@ -110,3 +113,25 @@ def partner_links() -> str:
     """One line naming both partners, for the foot of the page."""
     return (f"[International Institute for Tibetan and Asian Studies]({ITAS_URL})"
             f" · [Translating the Karmapas' Works]({KARMAPAS_URL})")
+
+
+def footer(tool: str, credit: str, caveat: str) -> str:
+    """The foot of a page: authorship, licence, warranty, partners, version.
+
+    Shared rather than copied, for the same reason the masthead is. The two
+    pages' footers had already diverged — one carried the partner links and
+    the other did not — and a footer that is three string literals in two
+    files diverges again the moment either is edited.
+
+    Only the three parts that genuinely differ are arguments: the tool's
+    name, the library it leans on, and what the reader should check before
+    trusting the output.
+    """
+    return (
+        f"**{tool}** by Yerena, J. — free and open source "
+        f"([MIT]({REPO_URL}/blob/main/LICENSE)) · [source code]({REPO_URL})  \n"
+        f"{credit}  \n"
+        f"Provided as-is, without warranty. {caveat}  \n"
+        f"{partner_links()}  \n"
+        f"Last updated {deployed_version()}"
+    )

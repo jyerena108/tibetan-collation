@@ -214,7 +214,7 @@ def parse_collation_report(raw: bytes):
 # ── Google Docs ──────────────────────────────────────────────────────
 # Shared with the other Streamlit pages — see docio.py — because a page can't
 # import this file itself for it without re-running this file's own UI code.
-from docio import fetch_google_doc, strip_gdoc_footnotes, deployed_version  # noqa: E402
+from docio import fetch_google_doc, strip_gdoc_footnotes  # noqa: E402
 
 
 # ── Page / folio markers ─────────────────────────────────────────────
@@ -3192,7 +3192,7 @@ if "report_buf" in st.session_state:
             )
 
 st.divider()
-REPO_URL = "https://github.com/jyerena108/tibetan-collation"
+REPO_URL = branding.REPO_URL      # one definition, shared with the other pages
 
 # Other tools live in this same app as further pages, so they share one
 # deploy, one pinned dependency set and one address. A page added under
@@ -3215,12 +3215,11 @@ with st.expander("🧰 Other tools"):
     )
 
 st.caption(
-    f"**Tibetan Collation Tool** by Yerena, J. — free and open source "
-    f"([MIT]({REPO_URL}/blob/main/LICENSE)) · [source code]({REPO_URL})  \n"
-    "Alignment by [Pydurma](https://github.com/openpecha/pydurma) "
-    "(OpenPecha, MIT).  \n"
-    "Provided as-is, without warranty. Please check collation results before "
-    "relying on them in published work.  \n"
-    f"{branding.partner_links()}  \n"
-    f"Last updated {deployed_version()}"
+    branding.footer(
+        "Tibetan Collation Tool",
+        "Alignment by [Pydurma](https://github.com/openpecha/pydurma) "
+        "(OpenPecha, MIT).",
+        "Please check collation results before relying on them in "
+        "published work.",
+    )
 )
