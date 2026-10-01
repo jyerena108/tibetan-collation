@@ -42,12 +42,23 @@ def masthead() -> None:
     between its mark and its descriptor, so the pair reads as one lockup
     rather than as two logos parked side by side.
 
-    Sized so the ITAS descriptor line — "International Institute for Tibetan
-    and Asian Studies" — is actually readable. Below about 44px it is not,
-    and a logo nobody can read is decoration rather than attribution. Both
-    files have the resolution for it: 48px is 59% of the ITAS artwork's own
-    height, 42px is 47% of the Karmapa's, so neither is being enlarged past
-    what it holds.
+    Sized against the page title rather than in the abstract. The title sets
+    at 44px, so a logo below that reads as a footnote to the page instead of
+    as the masthead of it — which is what 34px, and even 48px, looked like.
+    68px gives the ITAS mark clear precedence over the title and makes its
+    descriptor line, "International Institute for Tibetan and Asian Studies",
+    plainly readable.
+
+    Neither file is being enlarged past what it holds: 68px is 83% of the
+    ITAS artwork's own height, 60px is 67% of the Karmapa's. The Karmapa mark
+    is set slightly shorter because it is a two-line wordmark against a
+    single-line lockup; equal heights make it look the larger of the two.
+
+    The heights are written inline as well as in the stylesheet. A stylesheet
+    that gets stripped or fails to apply would silently leave both logos at
+    their natural size with nothing to show anything was wrong, and the
+    inline value is the one that renders in that case. The narrow-screen rule
+    therefore needs !important to beat it.
     """
     try:
         itas = _data_uri("itas-logo.png")
@@ -64,8 +75,8 @@ def masthead() -> None:
           }}
           .tct-masthead a {{ display:flex; align-items:center; }}
           .tct-masthead img {{ display:block; }}
-          .tct-masthead .tct-itas {{ height:48px; }}
-          .tct-masthead .tct-km   {{ height:42px; }}
+          .tct-masthead .tct-itas {{ height:68px; }}
+          .tct-masthead .tct-km   {{ height:60px; }}
           .tct-masthead .tct-rule {{
             width:1px; align-self:stretch; background:{_RULE};
           }}
@@ -75,18 +86,18 @@ def masthead() -> None:
           @media (max-width: 640px) {{
             .tct-masthead {{ gap:16px; padding:16px 20px; }}
             .tct-masthead .tct-rule {{ display:none; }}
-            .tct-masthead .tct-itas {{ height:40px; }}
-            .tct-masthead .tct-km   {{ height:34px; }}
+            .tct-masthead .tct-itas {{ height:46px !important; }}
+            .tct-masthead .tct-km   {{ height:40px !important; }}
           }}
         </style>
         <div class="tct-masthead">
           <a href="{ITAS_URL}" target="_blank" rel="noopener">
-            <img class="tct-itas" src="{itas}"
+            <img class="tct-itas" src="{itas}" style="height:68px;display:block;"
                  alt="ITAS — International Institute for Tibetan and Asian Studies">
           </a>
           <div class="tct-rule"></div>
           <a href="{KARMAPAS_URL}" target="_blank" rel="noopener">
-            <img class="tct-km" src="{karmapas}"
+            <img class="tct-km" src="{karmapas}" style="height:60px;display:block;"
                  alt="Translating the Karmapas' Works">
           </a>
         </div>
