@@ -17,6 +17,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "Pydurma", "src"))
 
 import io
+import copy
 import re
 import tempfile
 import urllib.error
@@ -356,6 +357,25 @@ def set_apostrophe_output(typographic: bool) -> None:
     """Print a-chung as the typographic apostrophe, or as the ASCII one."""
     global APOSTROPHE_OUT
     APOSTROPHE_OUT = "\u2019" if typographic else "'"
+
+
+# Bracketed material in the FOOTNOTE DOCUMENT — page markers and the folio
+# tags kept as milestones — used to be italicised unconditionally. That
+# document is the edition a reader is given, and whether it sets pagination
+# apart from the text is a house style rather than a fact about the text, so
+# it is asked rather than assumed; the default leaves the brackets in the
+# surrounding face.
+#
+# The collation report and the source-versions document are working papers,
+# not the edition. Their markers stay italic either way — there the italic
+# is how a reader tells a page marker from the reading beside it.
+BRACKET_ITALICS = False
+
+
+def set_bracket_italics(on: bool) -> None:
+    """Italicise bracketed material in the footnote document, or leave it plain."""
+    global BRACKET_ITALICS
+    BRACKET_ITALICS = bool(on)
 
 
 def apply_preprocessing_options(
@@ -868,6 +888,65 @@ def _reading_display(sylls) -> str:
         return OMITTED_MARK
     joiner = TSHEG if any(_TIBETAN_CHAR_RE.search(s) for s in sylls) else " "
     return joiner.join(sylls)
+
+
+# ── the omission mark, set in italics inside a finished footnote ──
+# ``om.`` is an editorial abbreviation, not a Tibetan reading, and critical
+# editions set it apart from the readings around it. It cannot be styled
+# when the note is built: bayoo-docx takes a footnote as one string and
+# writes it as one run, so the only moment the mark can be reached is after
+# the footnote exists. The run is therefore split into before / mark / after
+# and the middle one marked italic.
+#
+# The guard on the left stops the pattern matching the tail of a Wylie
+# syllable. No reading contains a full stop, so a bare ``om.`` elsewhere in
+# a note is the mark itself.
+_OMISSION_RE = re.compile(r"(?<![0-9A-Za-z\u0f00-\u0fff])" + re.escape(OMITTED_MARK))
+_XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
+
+
+def _footnote_run(text, rpr_template, italic):
+    """One run of footnote text, inheriting the note's own formatting."""
+    r = OxmlElement("w:r")
+    rpr = copy.deepcopy(rpr_template) if rpr_template is not None else None
+    if italic:
+        if rpr is None:
+            rpr = OxmlElement("w:rPr")
+        rpr.append(OxmlElement("w:i"))
+    if rpr is not None:
+        r.append(rpr)
+    t = OxmlElement("w:t")
+    # Without this the leading space bayoo-docx puts before the note, and any
+    # space adjoining the mark, would be dropped by Word.
+    t.set(_XML_SPACE, "preserve")
+    t.text = text
+    r.append(t)
+    return r
+
+
+def italicise_omission_marks(footnote) -> None:
+    """Set every ``om.`` in a finished footnote in italics, in place."""
+    if footnote is None:
+        return
+    for para in footnote.findall(qn("w:p")):
+        for run in list(para.findall(qn("w:r"))):
+            t = run.find(qn("w:t"))
+            text = t.text if t is not None else None
+            if not text or not _OMISSION_RE.search(text):
+                continue
+            rpr = run.find(qn("w:rPr"))
+            index = list(para).index(run)
+            pieces, pos = [], 0
+            for m in _OMISSION_RE.finditer(text):
+                if m.start() > pos:
+                    pieces.append(_footnote_run(text[pos:m.start()], rpr, False))
+                pieces.append(_footnote_run(m.group(0), rpr, True))
+                pos = m.end()
+            if pos < len(text):
+                pieces.append(_footnote_run(text[pos:], rpr, False))
+            para.remove(run)
+            for offset, piece in enumerate(pieces):
+                para.insert(index + offset, piece)
 
 
 def build_note_text(segs, labels, positive=False, ignore_shad=True):
@@ -2307,13 +2386,14 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
     copy of the diff logic in step with the first.
 
     Every witness's page markers are woven back into the running text at the
-    cell where that witness turns its page, in italics, so one reading text
+    cell where that witness turns its page — in italics only if the edition
+    asks for it, see set_bracket_italics() — so one reading text
     shows where all the witnesses stood. The base's own markers are included;
     removing them all again gives back the base exactly.
 
     ``milestones`` is an optional list of ``(offset, tag)`` pairs from
     extract_folio_tags(): folio/page tags stripped before collation that are
-    re-inserted here — as italic runs at their original character positions —
+    re-inserted here — at their original character positions —
     without ever having been part of the alignment or the apparatus.
     """
     milestones = sorted(milestones) if milestones else []
@@ -2395,7 +2475,8 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
             if cut > start:
                 write(p, text[start:cut], char_pos + start)
             tag_run = p.add_run(milestones[ms_index][1])
-            tag_run.italic = True
+            if BRACKET_ITALICS:
+                tag_run.italic = True
             start = cut
             ms_index += 1
         if start < len(text):
@@ -2516,7 +2597,8 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
                 pos = at
             if kind == 0:
                 mark_run = p_text.add_run(payload)
-                mark_run.italic = True
+                if BRACKET_ITALICS:
+                    mark_run.italic = True
                 # A space follows the closing bracket so the marker does not
                 # run into the word it precedes. The next character is often
                 # in the next cell, so the intent is carried and spent by
@@ -2524,7 +2606,9 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
                 # already has whitespace there, so none is doubled.
                 pending_space = True
             elif kind == 1:
-                p_text.add_footnote(notes[note_index - 1])
+                italicise_omission_marks(
+                    p_text.add_footnote(notes[note_index - 1])
+                )
             else:
                 start_line(payload, cell_start + at)
         if pos < len(seg):
@@ -2534,7 +2618,8 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
     # end of the base text) still needs to be written out.
     while ms_index < len(milestones):
         tag_run = p_text.add_run(milestones[ms_index][1])
-        tag_run.italic = True
+        if BRACKET_ITALICS:
+            tag_run.italic = True
         ms_index += 1
 
     # Footnote styles are only present after add_footnote() has run, so apply
@@ -2807,6 +2892,20 @@ ignore_shad = st.checkbox(
     "differences show up in the apparatus.",
 )
 
+want_brackets_italic = st.checkbox(
+    "Italicise bracketed material",
+    value=False,
+    key="bracketitalic",
+    help="In the footnote document, sets everything in square brackets — "
+    "page markers such as [V1.1v.1], folio tags kept as milestones, and the "
+    "brackets themselves — in italics. Off by default: whether pagination is "
+    "set apart from the text is a convention of the edition rather than a "
+    "property of it. The collation report is a working paper and is not "
+    "affected; nor are the footnote reference numbers [1], [2], which are "
+    "told from page markers by their shape. The editorial mark om. is "
+    "always italic.",
+)
+
 want_verse = st.checkbox(
     "Lay out verse as verse",
     value=False,
@@ -2865,7 +2964,7 @@ with st.expander(
         key="prep_keep",
         disabled=not prep_tags,
         help="The stripped tags from the base/golden text are re-inserted "
-        "into the downloaded golden document (in italics, at their original "
+        "into the downloaded golden document (at their original "
         "positions) as page references. They are never part of the "
         "collation itself. Tags from the comparison texts are not kept — "
         "the golden document reproduces only the base text.",
@@ -3006,6 +3105,7 @@ if run_btn and ready:
 
     # Apply the user's preprocessing choices
     set_apostrophe_output(want_normalize)
+    set_bracket_italics(want_brackets_italic)
     apply_preprocessing_options(
         underscore_as_space=prep_underscore,
         pipe_as_shad=prep_pipe,
