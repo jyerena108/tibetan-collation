@@ -697,6 +697,14 @@ def _merge_split_stacks(rows):
     ``seng``. Merging the cell that ends in ``+`` with the one after it puts
     the word back together, so a reading is never half a word.
 
+    The mark can fall on either side of the cut. Where the witnesses write
+    the stack differently — BX1 ``kun d+ha`` against DX1 ``kun+da`` — the
+    break lands before the ``+`` rather than after it, leaving ``kun d`` in
+    one cell and ``+ha`` in the next. Testing only for a trailing ``+``
+    missed that: the word was reported as two notes, and the footnote marker
+    was set down inside the stack, between the ``d`` and the ``+ha``. Both
+    sides are tested.
+
     Done whatever the stacking option is set to: this is about not reporting
     fragments, which is wrong either way. Cells are left alone when any
     witness has a gap in either of them, so an omission is never swallowed.
@@ -708,7 +716,8 @@ def _merge_split_stacks(rows):
         r.extend([""] * (width - len(r)))
     j = width - 2
     while j >= 0:
-        cut = any(r[j].rstrip().endswith("+") for r in rows)
+        cut = (any(r[j].rstrip().endswith("+") for r in rows)
+               or any(r[j + 1].lstrip().startswith("+") for r in rows))
         gap = any(r[j] == "-" or r[j + 1] == "-" for r in rows)
         if cut and not gap:
             for r in rows:
@@ -2375,6 +2384,54 @@ def _style_verse_line(p):
     return p
 
 
+def collapse_spaces_in_paragraphs(paragraphs) -> None:
+    """Reduce any run of spaces in the reading text to a single space.
+
+    A file that sets its folio markers off on their own line arrives as
+    several line breaks where the reading text wants a single space. They
+    cannot be collapsed as the text is written: the milestone and page-marker
+    offsets are indexes into that very string, and shortening it would move
+    every one of them. They are carried through as spaces instead, one
+    character for one, and reduced here, once every offset has been spent.
+
+    Verse layout turns every break into a space and so shows the fault at its
+    worst, but it appears without it too — a source with no run of two spaces
+    anywhere in it was coming back with two or three before every page
+    marker.
+
+    Only the reading-text paragraphs are passed in. The heading line spaces
+    its parts deliberately ("Base: BX1  |  Footnotes from comparison …") and
+    collapsing the whole body would have restyled that too. Runs holding a
+    footnote reference carry no text and are stepped over without breaking
+    the count, so a space either side of a marker still collapses to one.
+    """
+    text_tag, br_tag = qn("w:t"), qn("w:br")
+    for para in (q._element for q in paragraphs):
+        # Walked in document order rather than run by run: python-docx turns a
+        # newline into a <w:br/> and keeps several <w:t> inside the one run, so
+        # taking a run's first <w:t> would leave the rest of it unexamined —
+        # which is exactly where the stray spaces were hiding without verse
+        # layout. A break ends a line, so it clears a space the same way.
+        prev_ended_space = True      # a leading space in a paragraph also goes
+        for node in para.iter():
+            if node.tag == br_tag:
+                prev_ended_space = True
+                continue
+            if node.tag != text_tag or node.text is None:
+                continue             # a footnote reference: no text to join
+            text = re.sub(r"[ \t]{2,}", " ", node.text)
+            if prev_ended_space:
+                text = text.lstrip(" \t")
+            if text:
+                prev_ended_space = text[-1] in " \t"
+            if text != node.text:
+                node.text = text
+            if text.strip() != text:
+                # a leading or trailing space must be declared or Word eats it
+                node.set("{http://www.w3.org/XML/1998/namespace}space",
+                         "preserve")
+
+
 def export_golden_with_footnotes(cells, notes, labels, name1="base",
                                  milestones=None, ignore_shad=True,
                                  profile_texts=None, verse_layout=False,
@@ -2510,6 +2567,7 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
         doc.add_paragraph()
 
     p_text = doc.add_paragraph()
+    reading_paragraphs = [p_text]
     if verse_layout and verse_spans and in_verse(0):
         _style_verse_line(p_text)
 
@@ -2520,6 +2578,7 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
             gap = doc.add_paragraph()
             gap.paragraph_format.space_after = Pt(0)
         p_text = doc.add_paragraph()
+        reading_paragraphs.append(p_text)
         if in_verse(at):
             _style_verse_line(p_text)
 
@@ -2624,6 +2683,8 @@ def export_golden_with_footnotes(cells, notes, labels, name1="base",
 
     # Footnote styles are only present after add_footnote() has run, so apply
     # formatting now (before save) rather than on the empty document.
+    collapse_spaces_in_paragraphs(reading_paragraphs)
+
     ensure_footnote_reference_style(doc)
     shrink_footnote_style(doc, font_size=8, line_spacing_multiple=0.85)
 
